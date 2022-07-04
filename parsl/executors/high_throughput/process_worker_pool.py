@@ -494,93 +494,96 @@ def worker(worker_id, pool_id, pool_size, task_queue, result_queue, worker_queue
     Pop request from queue
     Put result into result_queue
     """
-    with cProfile.Profile() as pr:
-        # override the global logger inherited from the __main__ process (which
-        # usually logs to manager.log) with one specific to this worker.
-        global logger
-        logger = start_file_logger('{}/block-{}/{}/worker_{}.log'.format(args.logdir, args.block_id, pool_id, worker_id),
-                                   worker_id,
-                                   name="worker_log",
-                                   level=logging.DEBUG if args.debug else logging.INFO)
+    # override the global logger inherited from the __main__ process (which
+    # usually logs to manager.log) with one specific to this worker.
+    pr = cProfile.Profile()
+    pr.enable()
+    global logger
+    logger = start_file_logger('{}/block-{}/{}/worker_{}.log'.format(args.logdir, args.block_id, pool_id, worker_id),
+                               worker_id,
+                               name="worker_log",
+                               level=logging.DEBUG if args.debug else logging.INFO)
 
-        # Store worker ID as an environment variable
-        os.environ['PARSL_WORKER_RANK'] = str(worker_id)
-        os.environ['PARSL_WORKER_COUNT'] = str(pool_size)
-        os.environ['PARSL_WORKER_POOL_ID'] = str(pool_id)
-        os.environ['PARSL_WORKER_BLOCK_ID'] = str(args.block_id)
+    # Store worker ID as an environment variable
+    os.environ['PARSL_WORKER_RANK'] = str(worker_id)
+    os.environ['PARSL_WORKER_COUNT'] = str(pool_size)
+    os.environ['PARSL_WORKER_POOL_ID'] = str(pool_id)
+    os.environ['PARSL_WORKER_BLOCK_ID'] = str(args.block_id)
 
-        # share the result queue with monitoring code so it too can send results down that channel
-        import parsl.executors.high_throughput.monitoring_info as mi
-        mi.result_queue = result_queue
+    # share the result queue with monitoring code so it too can send results down that channel
+    import parsl.executors.high_throughput.monitoring_info as mi
+    mi.result_queue = result_queue
 
-        # Sync worker with master
-        logger.info('Worker {} started'.format(worker_id))
-        if args.debug:
-            logger.debug("Debug logging enabled")
+    # Sync worker with master
+    logger.info('Worker {} started'.format(worker_id))
+    if args.debug:
+        logger.debug("Debug logging enabled")
 
-        # If desired, set process affinity
-        if cpu_affinity != "none":
-            # Count the number of cores per worker
-            avail_cores = sorted(os.sched_getaffinity(0))  # Get the available processors
-            cores_per_worker = len(avail_cores) // pool_size
-            assert cores_per_worker > 0, "Affinity does not work if there are more workers than cores"
+    # If desired, set process affinity
+    if cpu_affinity != "none":
+        # Count the number of cores per worker
+        avail_cores = sorted(os.sched_getaffinity(0))  # Get the available processors
+        cores_per_worker = len(avail_cores) // pool_size
+        assert cores_per_worker > 0, "Affinity does not work if there are more workers than cores"
 
-            # Determine this worker's cores
-            if cpu_affinity == "block":
-                my_cores = avail_cores[cores_per_worker * worker_id:cores_per_worker * (worker_id + 1)]
-            elif cpu_affinity == "alternating":
-                my_cores = avail_cores[worker_id::pool_size]
-            else:
-                raise ValueError("Affinity strategy {} is not supported".format(cpu_affinity))
+        # Determine this worker's cores
+        if cpu_affinity == "block":
+            my_cores = avail_cores[cores_per_worker * worker_id:cores_per_worker * (worker_id + 1)]
+        elif cpu_affinity == "alternating":
+            my_cores = avail_cores[worker_id::pool_size]
+        else:
+            raise ValueError("Affinity strategy {} is not supported".format(cpu_affinity))
 
-            # Set the affinity for this worker
-            os.sched_setaffinity(0, my_cores)
-            logger.info("Set worker CPU affinity to {}".format(my_cores))
+        # Set the affinity for this worker
+        os.sched_setaffinity(0, my_cores)
+        logger.info("Set worker CPU affinity to {}".format(my_cores))
 
-        # If desired, pin to accelerator
-        if accelerator is not None:
-            os.environ["CUDA_VISIBLE_DEVICES"] = accelerator
-            os.environ["ROCR_VISIBLE_DEVICES"] = accelerator
-            os.environ["SYCL_DEVICE_FILTER"] = f"*:*:{accelerator}"
-            logger.info(f'Pinned worker to accelerator: {accelerator}')
+    # If desired, pin to accelerator
+    if accelerator is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = accelerator
+        os.environ["ROCR_VISIBLE_DEVICES"] = accelerator
+        os.environ["SYCL_DEVICE_FILTER"] = f"*:*:{accelerator}"
+        logger.info(f'Pinned worker to accelerator: {accelerator}')
 
-        while True:
-            worker_queue.put(worker_id)
+    while True:
+        worker_queue.put(worker_id)
 
-            # The worker will receive {'task_id':<tid>, 'buffer':<buf>}
-            req = task_queue.get()
-            tasks_in_progress[worker_id] = req
-            tid = req['task_id']
-            logger.info("Received task {}".format(tid))
+        # The worker will receive {'task_id':<tid>, 'buffer':<buf>}
+        req = task_queue.get()
+        tasks_in_progress[worker_id] = req
+        tid = req['task_id']
+        logger.info("Received task {}".format(tid))
 
-            try:
-                worker_queue.get()
-            except queue.Empty:
-                logger.warning("Worker ID: {} failed to remove itself from ready_worker_queue".format(worker_id))
-                pass
+        try:
+            worker_queue.get()
+        except queue.Empty:
+            logger.warning("Worker ID: {} failed to remove itself from ready_worker_queue".format(worker_id))
+            pass
 
-            try:
-                result = execute_task(req['buffer'])
-                serialized_result = serialize(result, buffer_threshold=1e6)
-            except Exception as e:
-                logger.info('Caught an exception: {}'.format(e))
-                result_package = {'type': 'result', 'task_id': tid, 'exception': serialize(RemoteExceptionWrapper(*sys.exc_info()))}
-            else:
-                result_package = {'type': 'result', 'task_id': tid, 'result': serialized_result}
-                # logger.debug("Result: {}".format(result))
+        try:
+            result = execute_task(req['buffer'])
+            serialized_result = serialize(result, buffer_threshold=1e6)
+        except Exception as e:
+            logger.info('Caught an exception: {}'.format(e))
+            result_package = {'type': 'result', 'task_id': tid, 'exception': serialize(RemoteExceptionWrapper(*sys.exc_info()))}
+        else:
+            result_package = {'type': 'result', 'task_id': tid, 'result': serialized_result}
+            # logger.debug("Result: {}".format(result))
 
-            logger.info("Completed task {}".format(tid))
-            try:
-                pkl_package = pickle.dumps(result_package)
-            except Exception:
-                logger.exception("Caught exception while trying to pickle the result package")
-                pkl_package = pickle.dumps({'type': 'result', 'task_id': tid,
-                                            'exception': serialize(RemoteExceptionWrapper(*sys.exc_info()))
-                })
+        logger.info("Completed task {}".format(tid))
+        try:
+            pkl_package = pickle.dumps(result_package)
+        except Exception:
+            logger.exception("Caught exception while trying to pickle the result package")
+            pkl_package = pickle.dumps({'type': 'result', 'task_id': tid,
+                                        'exception': serialize(RemoteExceptionWrapper(*sys.exc_info()))
+            })
 
-            result_queue.put(pkl_package)
-            tasks_in_progress.pop(worker_id)
-        pr.dump_stats(f"{args.logdir}/block-{args.block_id}/{pool_id}/worker_{worker_id}.prof")
+        result_queue.put(pkl_package)
+        tasks_in_progress.pop(worker_id)
+    logger.info("Worker Exited")
+    pr.disable()
+    pr.dump_stats(f"{args.logdir}/block-{args.block_id}/{pool_id}/worker_{worker_id}.prof")
 
 def start_file_logger(filename, rank, name='parsl', level=logging.DEBUG, format_string=None):
     """Add a stream log handler.

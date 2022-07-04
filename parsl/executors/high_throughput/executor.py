@@ -717,5 +717,6 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
         """
 
         logger.info("Attempting HighThroughputExecutor shutdown")
-        self.queue_proc.terminate()
+        self.command_client.run("SHUTDOWN")
+        # self.queue_proc.terminate()
         logger.info("Finished HighThroughputExecutor shutdown attempt")

@@ -126,7 +126,7 @@ class Interchange(object):
         self.logdir = logdir
         os.makedirs(self.logdir, exist_ok=True)
 
-        start_file_logger("{}/interchange.log".format(self.logdir), level=logging_level)
+        start_file_logger("{}/interchange.log".format(self.logdir), level=logging.DEBUG) # TODO DELETE level=logging_level)
         logger.propagate = False
         logger.debug("Initializing Interchange process")
 
@@ -344,6 +344,8 @@ class Interchange(object):
     def start(self, poll_period=None):
         """ Start the interchange
         """
+        # pr = cProfile.Profile()
+        # pr.enable()
         logger.info("Incoming ports bound")
 
         hub_channel = self._create_monitoring_channel()
@@ -554,10 +556,11 @@ class Interchange(object):
                 if manager in interesting_managers:
                     interesting_managers.remove(manager)
 
-        delta = time.time() - start
-        logger.info("Processed {} tasks in {} seconds".format(count, delta))
+        # delta = time.time() - start
+        # logger.info("Processed {} tasks in {} seconds".format(count, delta))
         logger.warning("Exiting")
-
+        # pr.disable()
+        # pr.dumb_stats(f"{self.logdir}/interchange.prof")
 
 def start_file_logger(filename, name='interchange', level=logging.DEBUG, format_string=None):
     """Add a stream log handler.
@@ -597,15 +600,12 @@ def starter(comm_q, *args, **kwargs):
     """Start the interchange process
 
     The executor is expected to call this function. The args, kwargs match that of the Interchange.__init__
-    """ 
-    with cProfile.Profile() as pr:
-        setproctitle("parsl: HTEX interchange")
-        # logger = multiprocessing.get_logger()
-        ic = Interchange(*args, **kwargs)
-        comm_q.put((ic.worker_task_port,
-                    ic.worker_result_port))
-        ic.start()
-    pr.dump_stats(f"{ic.logdir}/interchange.prof")
+    """
+    setproctitle("parsl: HTEX interchange")
+    # logger = multiprocessing.get_logger()
+    ic = Interchange(*args, **kwargs)
+    comm_q.put((ic.worker_task_port, ic.worker_result_port))
+    ic.start()
 
 
 if __name__ == '__main__':
