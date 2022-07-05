@@ -275,7 +275,7 @@ class Interchange(object):
             hub_channel.send_pyobj((MessageType.NODE_INFO, d))
 
     @wrap_with_logs(target="interchange")
-    def _command_server(self, kill_event):
+    def _command_server(self, kill_event, snxt_event):
         """ Command server to run async command to the interchange
         """
         logger.debug("[COMMAND] Command Server Starting")
@@ -327,6 +327,8 @@ class Interchange(object):
                 elif command_req == "SHUTDOWN":
                     logger.info("[CMD] Received SHUTDOWN command")
                     kill_event.set()
+                    while not snxt_event.is_set():
+                        pass
                     reply = True
 
                 else:
@@ -343,6 +345,9 @@ class Interchange(object):
     def start(self, poll_period=None):
         """ Start the interchange
         """
+        pr = cProfile.Profile()
+        pr.enable()
+
         logger.info("Incoming ports bound")
 
         hub_channel = self._create_monitoring_channel()
@@ -354,13 +359,14 @@ class Interchange(object):
         count = 0
 
         self._kill_event = threading.Event()
+        self._snxt_event = threading.Event() # snxt -> sync exit, ensure that the main thread can clean up before the command thread exits
         self._task_puller_thread = threading.Thread(target=self.migrate_tasks_to_internal,
                                                     args=(self._kill_event,),
                                                     name="Interchange-Task-Puller")
         self._task_puller_thread.start()
 
         self._command_thread = threading.Thread(target=self._command_server,
-                                                args=(self._kill_event,),
+                                                args=(self._kill_event,self._snxt_event,),
                                                 name="Interchange-Command")
         self._command_thread.start()
 
@@ -374,8 +380,11 @@ class Interchange(object):
         # onto this list.
         interesting_managers = set()
 
-        while not self._kill_event.is_set():
+        while True:
             self.socks = dict(poller.poll(timeout=poll_period))
+            if self._kill_event.is_set():
+                logger.warning("[MAIN] exiting main loop due to kill event")
+                break
 
             # Listen for requests for work
             if self.task_outgoing in self.socks and self.socks[self.task_outgoing] == zmq.POLLIN:
@@ -553,11 +562,13 @@ class Interchange(object):
                 if manager in interesting_managers:
                     interesting_managers.remove(manager)
 
-        # delta = time.time() - start
-        # logger.info("Processed {} tasks in {} seconds".format(count, delta))
-        logger.warning("Exiting")
-        # pr.disable()
-        # pr.dumb_stats(f"{self.logdir}/interchange.prof")
+        delta = time.time() - start
+        logger.info("Processed {} tasks in {} seconds".format(count, delta))
+        logger.warning("[MAIN] Exiting")
+
+        pr.disable()
+        pr.dump_stats(f"{self.logdir}/interchange.prof")
+        self._snxt_event.set()
 
 def start_file_logger(filename, name='interchange', level=logging.DEBUG, format_string=None):
     """Add a stream log handler.
