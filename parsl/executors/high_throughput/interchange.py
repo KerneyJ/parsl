@@ -27,7 +27,6 @@ from parsl.process_loggers import wrap_with_logs
 HEARTBEAT_CODE = (2 ** 32) - 1
 PKL_HEARTBEAT_CODE = pickle.dumps((2 ** 32) - 1)
 
-
 class ManagerLost(Exception):
     ''' Task lost due to manager loss. Manager is considered lost when multiple heartbeats
     have been missed.
@@ -344,8 +343,6 @@ class Interchange(object):
     def start(self, poll_period=None):
         """ Start the interchange
         """
-        # pr = cProfile.Profile()
-        # pr.enable()
         logger.info("Incoming ports bound")
 
         hub_channel = self._create_monitoring_channel()
