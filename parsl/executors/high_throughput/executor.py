@@ -657,54 +657,54 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
         -------
         List of job_ids marked for termination
         """
-
-        if block_ids:
-            block_ids_to_kill = block_ids
-        else:
-            managers = self.connected_managers
-            block_info = {}
-            for manager in managers:
-                if not manager['active']:
-                    continue
-                b_id = manager['block_id']
-                if b_id not in block_info:
-                    block_info[b_id] = [0, float('inf')]
-                block_info[b_id][0] += manager['tasks']
-                block_info[b_id][1] = min(block_info[b_id][1], manager['idle_duration'])
-
-            sorted_blocks = sorted(block_info.items(), key=lambda item: (item[1][1], item[1][0]))
-            if force is True:
-                block_ids_to_kill = [x[0] for x in sorted_blocks[:blocks]]
-            else:
-                if not max_idletime:
-                    block_ids_to_kill = [x[0] for x in sorted_blocks if x[1][0] == 0][:blocks]
-                else:
-                    block_ids_to_kill = []
-                    for x in sorted_blocks:
-                        if x[1][1] > max_idletime and x[1][0] == 0:
-                            block_ids_to_kill.append(x[0])
-                            if len(block_ids_to_kill) == blocks:
-                                break
-                logger.debug("Selecting block ids to kill since they are idle : {}".format(
-                    block_ids_to_kill))
-
-        logger.debug("Current blocks : {}".format(self.blocks))
-        # Hold the block
-        for block_id in block_ids_to_kill:
-            self._hold_block(block_id)
-
-        # Now kill via provider
-        # Potential issue with multiple threads trying to remove the same blocks
-        to_kill = [self.blocks[bid] for bid in block_ids_to_kill if bid in self.blocks]
-
-        r = self.provider.cancel(to_kill)
-        job_ids = self._filter_scale_in_ids(to_kill, r)
-
-        # to_kill block_ids are fetched from self.blocks
-        # If a block_id is in self.block, it must exist in self.block_mapping
-        block_ids_killed = [self.block_mapping[jid] for jid in job_ids]
-
-        return block_ids_killed
+        pass # TODO maybe uncomment, maybe replace, maybe delete
+#        if block_ids:
+#            block_ids_to_kill = block_ids
+#        else:
+#            managers = self.connected_managers
+#            block_info = {}
+#            for manager in managers:
+#                if not manager['active']:
+#                    continue
+#                b_id = manager['block_id']
+#                if b_id not in block_info:
+#                    block_info[b_id] = [0, float('inf')]
+#                block_info[b_id][0] += manager['tasks']
+#                block_info[b_id][1] = min(block_info[b_id][1], manager['idle_duration'])
+#
+#            sorted_blocks = sorted(block_info.items(), key=lambda item: (item[1][1], item[1][0]))
+#            if force is True:
+#                block_ids_to_kill = [x[0] for x in sorted_blocks[:blocks]]
+#            else:
+#                if not max_idletime:
+#                    block_ids_to_kill = [x[0] for x in sorted_blocks if x[1][0] == 0][:blocks]
+#                else:
+#                    block_ids_to_kill = []
+#                    for x in sorted_blocks:
+#                        if x[1][1] > max_idletime and x[1][0] == 0:
+#                            block_ids_to_kill.append(x[0])
+#                            if len(block_ids_to_kill) == blocks:
+#                                break
+#                logger.debug("Selecting block ids to kill since they are idle : {}".format(
+#                    block_ids_to_kill))
+#
+#        logger.debug("Current blocks : {}".format(self.blocks))
+#        # Hold the block
+#        for block_id in block_ids_to_kill:
+#            self._hold_block(block_id)
+#
+#        # Now kill via provider
+#        # Potential issue with multiple threads trying to remove the same blocks
+#        to_kill = [self.blocks[bid] for bid in block_ids_to_kill if bid in self.blocks]
+#
+#        r = self.provider.cancel(to_kill)
+#        job_ids = self._filter_scale_in_ids(to_kill, r)
+#
+#        # to_kill block_ids are fetched from self.blocks
+#        # If a block_id is in self.block, it must exist in self.block_mapping
+#        block_ids_killed = [self.block_mapping[jid] for jid in job_ids]
+#
+#        return block_ids_killed
 
     def _get_launch_command(self, block_id: str) -> str:
         if self.launch_cmd is None:

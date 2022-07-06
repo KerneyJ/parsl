@@ -255,7 +255,7 @@ class Manager(object):
             pending_task_count = self.pending_task_queue.qsize()
 
             logger.debug("[TASK_PULL_THREAD] ready workers:{}, pending tasks:{}".format(ready_worker_count,
-                                                                                        pending_task_count))
+                                                                                        pending_task_count)) 
 
             if time.time() > last_beat + self.heartbeat_period:
                 self.heartbeat_to_incoming()
@@ -271,7 +271,12 @@ class Manager(object):
             if self.task_incoming in socks and socks[self.task_incoming] == zmq.POLLIN:
                 poll_timer = 0
                 _, pkl_msg = self.task_incoming.recv_multipart()
+                if pkl_msg == b"STOP":
+                    logger.critical("[TASK_PULL_THREAD] Received stop request")
+                    kill_event.set()
+                    break
                 tasks = pickle.loads(pkl_msg)
+
                 last_interchange_contact = time.time()
 
                 if tasks == 'STOP':
@@ -362,8 +367,9 @@ class Manager(object):
         logger.debug("[WORKER_WATCHDOG_THREAD] Starting thread")
 
         while not kill_event.is_set():
+            logger.info(f"[WORKER_WATCHDOG_THREAD] kill event: {kill_event.is_set()}")
             for worker_id, p in self.procs.items():
-                if not p.is_alive():
+                if not p.is_alive() and not kill_event.is_set():
                     logger.info("[WORKER_WATCHDOG_THREAD] Worker {} has died".format(worker_id))
                     try:
                         task = self._tasks_in_progress.pop(worker_id)
@@ -441,7 +447,7 @@ class Manager(object):
 
         self._task_puller_thread.join()
         self._result_pusher_thread.join()
-        self._worker_watchdog_thread.join()
+
         for proc_id in self.procs:
             self.procs[proc_id].terminate()
             logger.critical("Terminating worker {}: is_alive()={}".format(self.procs[proc_id],
@@ -449,6 +455,7 @@ class Manager(object):
             self.procs[proc_id].join()
             logger.debug("Worker {} joined successfully".format(self.procs[proc_id]))
 
+        self._worker_watchdog_thread.join()
         self.task_incoming.close()
         self.result_outgoing.close()
         self.context.term()

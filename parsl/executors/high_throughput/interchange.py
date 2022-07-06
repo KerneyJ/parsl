@@ -383,6 +383,20 @@ class Interchange(object):
         while True:
             self.socks = dict(poller.poll(timeout=poll_period))
             if self._kill_event.is_set():
+                managers = [manager for manager, _ in self._ready_manager_queue.items()]
+                logger.debug(f"[MAIN] sending stop task to managers: {managers}")
+                while managers:
+                    manager = managers.pop(0)
+                    tasks_inflight = len(self._ready_manager_queue[manager]['tasks'])
+                    real_capacity = min(self._ready_manager_queue[manager]['free_capacity'],
+                                        self._ready_manager_queue[manager]['max_capacity'] - tasks_inflight)
+                    if real_capacity:
+                        msg = [manager, b"", b"STOP"]
+                        logger.debug(f"[MAIN] sending {msg} to manager {manager}")
+                        self.task_outgoing.send_multipart(msg)
+                    else:
+                        managers.append(manager)
+
                 logger.warning("[MAIN] exiting main loop due to kill event")
                 break
 
