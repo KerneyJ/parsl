@@ -407,9 +407,10 @@ class Manager(object):
         start = time.time()
         self._kill_event = threading.Event()
         self._tasks_in_progress = multiprocessing.Manager().dict()
-
         self.procs = {}
+        self.worker_pipes = []
         for worker_id in range(self.worker_count):
+            parent, child = multiprocessing.Pipe()
             p = mpProcess(target=worker, args=(worker_id,
                                                self.uid,
                                                self.worker_count,
@@ -418,10 +419,13 @@ class Manager(object):
                                                self.ready_worker_queue,
                                                self._tasks_in_progress,
                                                self.cpu_affinity,
+                                               child, # TODO change this back to child
                                                self.available_accelerators[worker_id] if self.accelerators_available else None),
                           name="HTEX-Worker-{}".format(worker_id))
             p.start()
             self.procs[worker_id] = p
+            self.worker_pipes.append(parent)
+
 
         logger.debug("Manager synced with workers")
 
@@ -438,24 +442,37 @@ class Manager(object):
         self._result_pusher_thread.start()
         self._worker_watchdog_thread.start()
 
+        for pipe in self.worker_pipes:
+            msg = pipe.recv()
+            logger.info(f"Received message: {msg}")
+
         logger.info("Loop start")
 
         # TODO : Add mechanism in this loop to stop the worker pool
         # This might need a multiprocessing event to signal back.
+
+
         self._kill_event.wait()
-        logger.critical("[MAIN] Received kill event, terminating worker processes")
+
+        for pipe in self.worker_pipes:
+            pipe.send("EXIT")
+
+        time.sleep(20)
+        #logger.critical("[MAIN] Received kill event, terminating worker processes")
 
         self._task_puller_thread.join()
         self._result_pusher_thread.join()
-
-        for proc_id in self.procs:
-            self.procs[proc_id].terminate()
-            logger.critical("Terminating worker {}: is_alive()={}".format(self.procs[proc_id],
-                                                                          self.procs[proc_id].is_alive()))
-            self.procs[proc_id].join()
-            logger.debug("Worker {} joined successfully".format(self.procs[proc_id]))
-
+        #for proc_id in self.procs:
+        #    self.procs[proc_id].terminate()
+        #    logger.critical("Terminating worker {}: is_alive()={}".format(self.procs[proc_id],
+        #                                                                  self.procs[proc_id].is_alive()))
+        #    self.procs[proc_id].join()
+        #    logger.debug("Worker {} joined successfully".format(self.procs[proc_id]))
         self._worker_watchdog_thread.join()
+
+        #logger.info("[MAIN] setting kill_q")
+        #self._kill_q.put("STOP")
+        #logger.info("[MAIN] kill_q set")
         self.task_incoming.close()
         self.result_outgoing.close()
         self.context.term()
@@ -494,7 +511,7 @@ def execute_task(bufs):
 
 
 @wrap_with_logs(target="worker_log")
-def worker(worker_id, pool_id, pool_size, task_queue, result_queue, worker_queue, tasks_in_progress, cpu_affinity, accelerator: Optional[str]):
+def worker(worker_id, pool_id, pool_size, task_queue, result_queue, worker_queue, tasks_in_progress, cpu_affinity, pipe, accelerator: Optional[str]):
     """
     Put request token into queue
     Get task from task_queue
@@ -551,8 +568,15 @@ def worker(worker_id, pool_id, pool_size, task_queue, result_queue, worker_queue
         os.environ["ROCR_VISIBLE_DEVICES"] = accelerator
         os.environ["SYCL_DEVICE_FILTER"] = f"*:*:{accelerator}"
         logger.info(f'Pinned worker to accelerator: {accelerator}')
-
+    pipe.send(f"Worker {worker_id} is starting")
+    logger.info("sent manager starting message")
     while True:
+        if pipe.poll(1):
+            msg = pipe.recv()
+            if msg == "EXIT":
+                logger.warning("Received exit message from manager")
+                break
+            logger.info(f"Received message from manager: {msg}")
         worker_queue.put(worker_id)
 
         # The worker will receive {'task_id':<tid>, 'buffer':<buf>}
@@ -588,7 +612,7 @@ def worker(worker_id, pool_id, pool_size, task_queue, result_queue, worker_queue
 
         result_queue.put(pkl_package)
         tasks_in_progress.pop(worker_id)
-    logger.info("Worker Exited")
+    logger.warning("Exiting")
     pr.disable()
     pr.dump_stats(f"{args.logdir}/block-{args.block_id}/{pool_id}/worker_{worker_id}.prof")
 
