@@ -24,6 +24,7 @@ from parsl.process_loggers import wrap_with_logs
 from parsl.version import VERSION as PARSL_VERSION
 from parsl.app.errors import RemoteExceptionWrapper
 from parsl.executors.high_throughput.errors import WorkerLost
+from parsl.executors.high_throughput.profile_thread import ProfileThread
 from parsl.executors.high_throughput.probe import probe_addresses
 from parsl.multiprocessing import ForkProcess as mpProcess
 
@@ -65,7 +66,8 @@ class Manager(object):
                  heartbeat_period=30,
                  poll_period=10,
                  cpu_affinity=False,
-                 available_accelerators: Sequence[str] = ()):
+                 available_accelerators: Sequence[str] = (),
+                 save_dir="."):
         """
         Parameters
         ----------
@@ -154,6 +156,7 @@ class Manager(object):
         logger.info("Manager connected")
 
         self.uid = uid
+        self.save_dir = save_dir
         self.block_id = block_id
 
         if os.environ.get('PARSL_CORES'):
@@ -311,6 +314,7 @@ class Manager(object):
                     kill_event.set()
                     logger.critical("[TASK_PULL_THREAD] Exiting")
                     break
+        logger.critical("[TASK_PULL_THREAD] Exiting")
 
     @wrap_with_logs
     def push_results(self, kill_event):
@@ -424,15 +428,18 @@ class Manager(object):
 
         logger.debug("Manager synced with workers")
 
-        self._task_puller_thread = threading.Thread(target=self.pull_tasks,
+        self._task_puller_thread = ProfileThread(target=self.pull_tasks,
                                                     args=(self._kill_event,),
-                                                    name="Task-Puller")
-        self._result_pusher_thread = threading.Thread(target=self.push_results,
-                                                      args=(self._kill_event,),
-                                                      name="Result-Pusher")
-        self._worker_watchdog_thread = threading.Thread(target=self.worker_watchdog,
-                                                        args=(self._kill_event,),
-                                                        name="worker-watchdog")
+                                                    name="Task-Puller",
+                                                    save_dir=self.save_dir)
+        self._result_pusher_thread = ProfileThread(target=self.push_results,
+                                                    args=(self._kill_event,),
+                                                    name="Result-Pusher",
+                                                    save_dir=self.save_dir)
+        self._worker_watchdog_thread = ProfileThread(target=self.worker_watchdog,
+                                                    args=(self._kill_event,),
+                                                    name="worker-watchdog",
+                                                    save_dir=self.save_dir)
         self._task_puller_thread.start()
         self._result_pusher_thread.start()
         self._worker_watchdog_thread.start()
@@ -450,21 +457,13 @@ class Manager(object):
 
         self._task_puller_thread.join()
         self._result_pusher_thread.join()
-        for proc_id in self.procs:
-            self.procs[proc_id].terminate()
-            logger.critical("Terminating worker {}: is_alive()={}".format(self.procs[proc_id],
-                                                                          self.procs[proc_id].is_alive()))
-            self.procs[proc_id].join()
-            logger.debug("Worker {} joined successfully".format(self.procs[proc_id]))
         self._worker_watchdog_thread.join()
-
         self.task_incoming.close()
         self.result_outgoing.close()
         self.context.term()
         delta = time.time() - start
         logger.info("process_worker_pool ran for {} seconds".format(delta))
         return
-
 
 def execute_task(bufs):
     """Deserialize the buffer and execute the task.
@@ -595,7 +594,7 @@ def worker(worker_id, pool_id, pool_size, task_queue, result_queue, worker_queue
         tasks_in_progress.pop(worker_id)
     logger.warning("Exiting")
     pr.disable()
-    pr.dump_stats(f"{args.logdir}/block-{args.block_id}/{pool_id}/worker_{worker_id}.prof")
+    pr.dump_stats(f"{args.logdir}/block-{args.block_id}/{pool_id}/worker_{worker_id}.pstats")
 
 def start_file_logger(filename, rank, name='parsl', level=logging.DEBUG, format_string=None):
     """Add a stream log handler.
@@ -702,7 +701,8 @@ if __name__ == "__main__":
                           heartbeat_period=int(args.hb_period),
                           poll_period=int(args.poll),
                           cpu_affinity=args.cpu_affinity,
-                          available_accelerators=args.available_accelerators)
+                          available_accelerators=args.available_accelerators,
+                          save_dir=f'{args.logdir}/block-{args.block_id}/{args.uid}')
         manager.start()
 
     except Exception:

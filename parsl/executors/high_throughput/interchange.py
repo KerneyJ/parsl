@@ -252,6 +252,7 @@ class Interchange(object):
                 task_counter += 1
                 logger.debug("[TASK_PULL_THREAD] Fetched task:{}".format(task_counter))
         logger.info("[TASK_PULL_THREAD] reached end of migrate_tasks_to_internal loop")
+        logger.critical("[TASK_PULL_THREAD] Exiting")
 
     def _create_monitoring_channel(self):
         if self.hub_address and self.hub_port:
@@ -340,6 +341,7 @@ class Interchange(object):
             except zmq.Again:
                 logger.debug("[COMMAND] is alive")
                 continue
+        logger.critical("[COMMAND] Exiting")
 
     @wrap_with_logs
     def start(self, poll_period=None):
@@ -581,8 +583,10 @@ class Interchange(object):
         logger.warning("[MAIN] Exiting")
 
         pr.disable()
-        pr.dump_stats(f"{self.logdir}/interchange.prof")
+        pr.dump_stats(f"{self.logdir}/interchange.pstats")
         self._snxt_event.set()
+        self._task_puller_thread.join()
+        self._command_thread.join()
 
 def start_file_logger(filename, name='interchange', level=logging.DEBUG, format_string=None):
     """Add a stream log handler.
