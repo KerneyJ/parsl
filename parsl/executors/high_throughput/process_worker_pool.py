@@ -124,7 +124,7 @@ class Manager(object):
             List of accelerators available to the workers. Default: Empty list
         """
 
-        logger.info("Manager started")
+        logger.info(f"Manager started; pid: {os.getpid()}") #TODO remove os.getpid()
 
         try:
             ix_address = probe_addresses(addresses.split(','), task_port, timeout=address_probe_timeout)
@@ -336,7 +336,6 @@ class Manager(object):
         items = []
 
         while not kill_event.is_set():
-
             try:
                 r = self.pending_result_queue.get(block=True, timeout=push_poll_period)
                 items.append(r)
@@ -356,6 +355,19 @@ class Manager(object):
                     self.result_outgoing.send_multipart(items)
                     items = []
 
+        terminated_workers = 0
+        while terminated_workers < self.worker_count:
+            try:
+                r = self.pending_result_queue.get(block=True, timeout=push_poll_period)
+                logger.info(f"[RESULT_PUSH_THREAD] Received {r}")
+                if b"TERM" in r:
+                    terminated_workers += 1
+            except queue.Empty:
+                pass
+            except Exception as e:
+                logger.exception(f"[RESULT_PUSH_THREAD] Got an exception {e}")
+        logger.info("[RESULT_PUSH_THREAD] All workers exited successfully")
+        self.result_outgoing.send(self.uid.encode("utf-8"))
         logger.critical("[RESULT_PUSH_THREAD] Exiting")
 
     @wrap_with_logs
@@ -456,18 +468,33 @@ class Manager(object):
             self.pending_task_queue.put( {'task_id':None, 'buffer':'STOP'})
 
         self._task_puller_thread.join()
-        self._result_pusher_thread.join()
         self._worker_watchdog_thread.join()
+        self._result_pusher_thread.join()
         self.task_incoming.close()
         self.result_outgoing.close()
         self.context.term()
+
+        logger.info(f"Thread status:"\
+                f"task puller {self._task_puller_thread.is_alive()};"\
+                f"result pusher {self._result_pusher_thread.is_alive()};"\
+                f"watchdog {self._worker_watchdog_thread.is_alive()};")
+
+        # terminate the workers
+        workers_tokill = [process for worker_id, process in self.procs.items()]
+        while workers_tokill:
+            proc = workers_tokill.pop(0)
+            if proc.is_alive():
+                proc.kill()
+                logger.info(f"Sent {proc.pid} a kill signal")
+                workers_tokill.append(proc)
+            else:
+                logger.info(f"Worker with pid {proc.pid} has been killed")
+
         delta = time.time() - start
         logger.info("process_worker_pool ran for {} seconds".format(delta))
-        return
 
 def execute_task(bufs):
     """Deserialize the buffer and execute the task.
-
     Returns the result or throws exception.
     """
     user_ns = locals()
@@ -523,7 +550,7 @@ def worker(worker_id, pool_id, pool_size, task_queue, result_queue, worker_queue
     mi.result_queue = result_queue
 
     # Sync worker with master
-    logger.info('Worker {} started'.format(worker_id))
+    logger.info('Worker {} started; pid: {}'.format(worker_id, os.getpid()))
     if args.debug:
         logger.debug("Debug logging enabled")
 
@@ -592,9 +619,11 @@ def worker(worker_id, pool_id, pool_size, task_queue, result_queue, worker_queue
 
         result_queue.put(pkl_package)
         tasks_in_progress.pop(worker_id)
-    logger.warning("Exiting")
     pr.disable()
     pr.dump_stats(f"{args.logdir}/block-{args.block_id}/{pool_id}/worker_{worker_id}.pstats")
+    result_queue.put(f"Worker_{worker_id}-TERM".encode("utf-8"))
+    logger.warning("Exiting")
+    quit()
 
 def start_file_logger(filename, rank, name='parsl', level=logging.DEBUG, format_string=None):
     """Add a stream log handler.

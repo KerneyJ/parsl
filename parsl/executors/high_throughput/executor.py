@@ -717,6 +717,44 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
         """
 
         logger.info("Attempting HighThroughputExecutor shutdown")
-        self.command_client.run("SHUTDOWN")
+        managers = self.connected_managers
+        if not self.command_client.run("SHUTDOWN"): # maybe change the name of shutdown command to cleanup(cleanup is a more accurate name)
+            logger.warning("Interchange clean up unsuccessful")
+        else:
+            logger.info("Interchange clean up successful")
         # self.queue_proc.terminate()
+        # scale in; copied the above scale in method down to here
+
+        blocks = len(self.provider.resources.keys())
+        block_info = {}
+        for manager in managers:
+            if not manager['active']:
+                continue
+            b_id = manager['block_id']
+            if b_id not in block_info:
+                block_info[b_id] = [0, float('inf')]
+            block_info[b_id][0] += manager['tasks']
+            block_info[b_id][1] = min(block_info[b_id][1], manager['idle_duration'])
+
+        sorted_blocks = sorted(block_info.items(), key=lambda item: (item[1][1], item[1][0]))
+        block_ids_to_kill = [x[0] for x in sorted_blocks[:blocks]]
+        logger.info("Blocks to kill have been collected")
+
+        logger.debug("Current blocks : {}".format(self.blocks))
+        ## Hold the block
+        #for block_id in block_ids_to_kill:
+        #    self._hold_block(block_id)
+        #logger.info("All blocks put on hold")
+
+        # Now kill via provider
+        # Potential issue with multiple threads trying to remove the same blocks
+        to_kill = [self.blocks[bid] for bid in block_ids_to_kill if bid in self.blocks]
+        r = self.provider.cancel(to_kill)
+        job_ids = self._filter_scale_in_ids(to_kill, r)
+        logger.info("All blocks killed via provider")
+
+        ## to_kill block_ids are fetched from self.blocks
+        ## If a block_id is in self.block, it must exist in self.block_mapping
+        #block_ids_killed = [self.block_mapping[jid] for jid in job_ids]
+
         logger.info("Finished HighThroughputExecutor shutdown attempt")

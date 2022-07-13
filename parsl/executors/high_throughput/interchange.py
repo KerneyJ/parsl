@@ -125,7 +125,7 @@ class Interchange(object):
         self.logdir = logdir
         os.makedirs(self.logdir, exist_ok=True)
 
-        start_file_logger("{}/interchange.log".format(self.logdir), level=logging.DEBUG) # TODO DELETE level=logging_level)
+        start_file_logger("{}/interchange.log".format(self.logdir), level=logging_level) # TODO DELETE level=logging_level)
         logger.propagate = False
         logger.debug("Initializing Interchange process")
 
@@ -328,8 +328,7 @@ class Interchange(object):
                 elif command_req == "SHUTDOWN":
                     logger.info("[CMD] Received SHUTDOWN command")
                     kill_event.set()
-                    while not snxt_event.is_set():
-                        pass
+                    snxt_event.wait()
                     reply = True
 
                 else:
@@ -386,7 +385,8 @@ class Interchange(object):
             self.socks = dict(poller.poll(timeout=poll_period))
             if self._kill_event.is_set():
                 managers = [manager for manager, _ in self._ready_manager_queue.items()]
-                logger.debug(f"[MAIN] sending stop task to managers: {managers}")
+                stopped_managers = []
+                logger.info(f"[MAIN] sending stop task to managers: {managers}")
                 while managers:
                     manager = managers.pop(0)
                     tasks_inflight = len(self._ready_manager_queue[manager]['tasks'])
@@ -396,10 +396,18 @@ class Interchange(object):
                         msg = [manager, b"", b"STOP"]
                         logger.debug(f"[MAIN] sending {msg} to manager {manager}")
                         self.task_outgoing.send_multipart(msg)
+                        stopped_managers.append(manager)
                     else:
                         managers.append(manager)
 
-                logger.warning("[MAIN] exiting main loop due to kill event")
+                logger.info(f"[MAIN] waiting for managers to terminate their workers")
+
+                while stopped_managers:
+                    manager = self.results_incoming.recv()
+                    if manager in stopped_managers:
+                        logger.debug(f"[MAIN] Manager {manager} confirmed it has terminated its workers")
+                        stopped_managers.remove(manager)
+                logger.warning("[MAIN] exiting main loop")
                 break
 
             # Listen for requests for work
@@ -580,13 +588,13 @@ class Interchange(object):
 
         delta = time.time() - start
         logger.info("Processed {} tasks in {} seconds".format(count, delta))
-        logger.warning("[MAIN] Exiting")
 
         pr.disable()
         pr.dump_stats(f"{self.logdir}/interchange.pstats")
-        self._snxt_event.set()
         self._task_puller_thread.join()
+        self._snxt_event.set()
         self._command_thread.join()
+        logger.critical("[MAIN] Exiting")
 
 def start_file_logger(filename, name='interchange', level=logging.DEBUG, format_string=None):
     """Add a stream log handler.
