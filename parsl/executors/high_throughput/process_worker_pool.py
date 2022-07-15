@@ -124,7 +124,7 @@ class Manager(object):
             List of accelerators available to the workers. Default: Empty list
         """
 
-        logger.info(f"Manager started; pid: {os.getpid()}") #TODO remove os.getpid()
+        logger.info(f"Manager started") 
 
         try:
             ix_address = probe_addresses(addresses.split(','), task_port, timeout=address_probe_timeout)
@@ -463,7 +463,7 @@ class Manager(object):
 
         self._kill_event.wait()
 
-        # TODO put a bunch of stop task on to the q
+        # put a bunch of stop task on to the q
         for i in range(10000):
             self.pending_task_queue.put( {'task_id':None, 'buffer':'STOP'})
 
