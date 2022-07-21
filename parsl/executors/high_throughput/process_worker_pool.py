@@ -468,7 +468,7 @@ class Manager(object):
             self.pending_task_queue.put( {'task_id':None, 'buffer':'STOP'})
 
         self._task_puller_thread.join()
-        self._worker_watchdog_thread.join()
+        self._worker_watchdog_thread.join() # FIXME for some reason this does not generate a .pstats file
         self._result_pusher_thread.join()
         self.task_incoming.close()
         self.result_outgoing.close()
