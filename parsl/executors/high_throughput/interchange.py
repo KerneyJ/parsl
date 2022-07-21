@@ -16,6 +16,7 @@ import json
 
 from parsl.utils import setproctitle
 from parsl.version import VERSION as PARSL_VERSION
+from parsl.executors.high_throughput.profile_thread import ProfileThread
 from parsl.serialize import ParslSerializer
 serialize_object = ParslSerializer().serialize
 
@@ -346,9 +347,6 @@ class Interchange(object):
     def start(self, poll_period=None):
         """ Start the interchange
         """
-        pr = cProfile.Profile()
-        pr.enable()
-
         logger.info("Incoming ports bound")
 
         hub_channel = self._create_monitoring_channel()
@@ -361,15 +359,20 @@ class Interchange(object):
 
         self._kill_event = threading.Event()
         self._snxt_event = threading.Event() # snxt -> sync exit, ensure that the main thread can clean up before the command thread exits
-        self._task_puller_thread = threading.Thread(target=self.migrate_tasks_to_internal,
+        self._task_puller_thread = ProfileThread(target=self.migrate_tasks_to_internal,
                                                     args=(self._kill_event,),
-                                                    name="Interchange-Task-Puller")
+                                                    name="Interchange-Task-Puller",
+                                                    save_dir=self.logdir,)
         self._task_puller_thread.start()
 
-        self._command_thread = threading.Thread(target=self._command_server,
+        self._command_thread = ProfileThread(target=self._command_server,
                                                 args=(self._kill_event,self._snxt_event,),
-                                                name="Interchange-Command")
+                                                name="Interchange-Command",
+                                                save_dir=self.logdir,)
         self._command_thread.start()
+
+        pr = cProfile.Profile()
+        pr.enable()
 
         poller = zmq.Poller()
         poller.register(self.task_outgoing, zmq.POLLIN)
