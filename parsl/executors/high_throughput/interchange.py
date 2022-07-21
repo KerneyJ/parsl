@@ -16,7 +16,6 @@ import json
 
 from parsl.utils import setproctitle
 from parsl.version import VERSION as PARSL_VERSION
-from parsl.executors.high_throughput.profile_thread import ProfileThread
 from parsl.serialize import ParslSerializer
 serialize_object = ParslSerializer().serialize
 
@@ -229,6 +228,8 @@ class Interchange(object):
         kill_event : threading.Event
               Event to let the thread know when it is time to die.
         """
+        pr = cProfile.Profile()
+        pr.enable()
         logger.info("[TASK_PULL_THREAD] Starting")
         task_counter = 0
         poller = zmq.Poller()
@@ -254,6 +255,8 @@ class Interchange(object):
                 logger.debug("[TASK_PULL_THREAD] Fetched task:{}".format(task_counter))
         logger.info("[TASK_PULL_THREAD] reached end of migrate_tasks_to_internal loop")
         logger.critical("[TASK_PULL_THREAD] Exiting")
+        pr.disable()
+        pr.dump_stats(f"{self.logdir}/Interchange-Task-Puller.pstats")
 
     def _create_monitoring_channel(self):
         if self.hub_address and self.hub_port:
@@ -280,11 +283,12 @@ class Interchange(object):
     def _command_server(self, kill_event, snxt_event):
         """ Command server to run async command to the interchange
         """
+        pr = cProfile.Profile()
+        pr.enable()
         logger.debug("[COMMAND] Command Server Starting")
 
         # Need to create a new ZMQ socket for command server thread
         hub_channel = self._create_monitoring_channel()
-
         while not kill_event.is_set():
             try:
                 command_req = self.command_channel.recv_pyobj()
@@ -342,6 +346,8 @@ class Interchange(object):
                 logger.debug("[COMMAND] is alive")
                 continue
         logger.critical("[COMMAND] Exiting")
+        pr.disable()
+        pr.dump_stats(f"{self.logdir}/Interchange-Command.pstats")
 
     @wrap_with_logs
     def start(self, poll_period=None):
@@ -359,16 +365,14 @@ class Interchange(object):
 
         self._kill_event = threading.Event()
         self._snxt_event = threading.Event() # snxt -> sync exit, ensure that the main thread can clean up before the command thread exits
-        self._task_puller_thread = ProfileThread(target=self.migrate_tasks_to_internal,
+        self._task_puller_thread = threading.Thread(target=self.migrate_tasks_to_internal,
                                                  args=(self._kill_event,),
-                                                 name="Interchange-Task-Puller",
-                                                 save_dir=self.logdir)
+                                                 name="Interchange-Task-Puller")
         self._task_puller_thread.start()
 
-        self._command_thread = ProfileThread(target=self._command_server,
+        self._command_thread = threading.Thread(target=self._command_server,
                                              args=(self._kill_event,self._snxt_event,),
-                                             name="Interchange-Command",
-                                             save_dir=self.logdir)
+                                             name="Interchange-Command")
         self._command_thread.start()
 
         pr = cProfile.Profile()
