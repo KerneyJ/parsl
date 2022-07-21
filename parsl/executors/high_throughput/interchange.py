@@ -360,15 +360,15 @@ class Interchange(object):
         self._kill_event = threading.Event()
         self._snxt_event = threading.Event() # snxt -> sync exit, ensure that the main thread can clean up before the command thread exits
         self._task_puller_thread = ProfileThread(target=self.migrate_tasks_to_internal,
-                                                    args=(self._kill_event,),
-                                                    name="Interchange-Task-Puller",
-                                                    save_dir=self.logdir,)
+                                                 args=(self._kill_event,),
+                                                 name="Interchange-Task-Puller",
+                                                 save_dir=self.logdir)
         self._task_puller_thread.start()
 
         self._command_thread = ProfileThread(target=self._command_server,
-                                                args=(self._kill_event,self._snxt_event,),
-                                                name="Interchange-Command",
-                                                save_dir=self.logdir,)
+                                             args=(self._kill_event,self._snxt_event,),
+                                             name="Interchange-Command",
+                                             save_dir=self.logdir)
         self._command_thread.start()
 
         pr = cProfile.Profile()
@@ -593,7 +593,7 @@ class Interchange(object):
         logger.info("Processed {} tasks in {} seconds".format(count, delta))
 
         pr.disable()
-        pr.dump_stats(f"{self.logdir}/interchange.pstats")
+        pr.dump_stats(f"{self.logdir}/Interchange-Main-Loop.pstats")
         self._task_puller_thread.join()
         self._snxt_event.set()
         self._command_thread.join()
