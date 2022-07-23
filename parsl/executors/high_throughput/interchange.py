@@ -396,18 +396,10 @@ class Interchange(object):
                 logger.info(f"[MAIN] sending stop task to managers: {managers}")
                 while managers:
                     manager = managers.pop(0)
-                    tasks_inflight = len(self._ready_manager_queue[manager]['tasks'])
-                    real_capacity = min(self._ready_manager_queue[manager]['free_capacity'],
-                                        self._ready_manager_queue[manager]['max_capacity'] - tasks_inflight)
-                    if real_capacity:
-                        msg = [manager, b"", b"STOP"]
-                        logger.debug(f"[MAIN] sending {msg} to manager {manager}")
-                        self.task_outgoing.send_multipart(msg)
-                        stopped_managers.append(manager)
-                    else:
-                        managers.append(manager)
-
-                logger.info(f"[MAIN] waiting for managers to terminate their workers")
+                    msg = [manager, b"", b"STOP"]
+                    logger.debug(f"[MAIN] sending {msg} to manager {manager}")
+                    self.task_outgoing.send_multipart(msg)
+                    stopped_managers.append(manager)
 
                 while stopped_managers:
                     manager = self.results_incoming.recv()
