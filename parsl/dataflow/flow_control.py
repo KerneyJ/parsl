@@ -3,6 +3,7 @@ import sys
 import threading
 import time
 
+from parsl.threading import ProfileThread
 from parsl.dataflow.task_status_poller import TaskStatusPoller
 
 logger = logging.getLogger(__name__)
@@ -65,7 +66,7 @@ class FlowControl(object):
         self._event_buffer = []
         self._wake_up_time = time.time() + 1
         self._kill_event = threading.Event()
-        self._thread = threading.Thread(target=self._wake_up_timer, args=(self._kill_event,), name="FlowControl-Thread")
+        self._thread = ProfileThread(target=self._wake_up_timer, args=(self._kill_event,), name="FlowControl-Thread", save_dir=self.dfk.run_dir)
         self._thread.daemon = True
         self._thread.start()
 
@@ -162,7 +163,7 @@ class Timer(object):
             name = "Timer-Thread-{}".format(id(self))
         else:
             name = "{}-Timer-Thread-{}".format(name, id(self))
-        self._thread = threading.Thread(target=self._wake_up_timer, args=(self._kill_event,), name=name)
+        self._thread = ProfileThread(target=self._wake_up_timer, args=(self._kill_event,), name=name, save_dir=self.dfk.run_dir)
         self._thread.daemon = True
         self._thread.start()
 

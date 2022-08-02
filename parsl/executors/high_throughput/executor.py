@@ -27,6 +27,7 @@ from parsl.addresses import get_all_addresses
 from parsl.process_loggers import wrap_with_logs
 
 from parsl.multiprocessing import ForkProcess
+from parsl.threading import ProfileThread
 from parsl.utils import RepresentationMixin
 from parsl.providers import LocalProvider
 
@@ -332,7 +333,6 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
         self.command_client = zmq_pipes.CommandClient("127.0.0.1", self.interchange_port_range)
 
         self.is_alive = True
-
         self._queue_management_thread = None
         self._start_queue_management_thread()
         self._start_local_queue_process()
@@ -449,7 +449,6 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
                                 raise BadMessage("Message received is neither result or exception")
                         else:
                             raise BadMessage("Message received with unknown type {}".format(msg['type']))
-
             if not self.is_alive:
                 break
         logger.info("[MTHREAD] queue management worker finished")
@@ -493,7 +492,7 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
         """
         if self._queue_management_thread is None:
             logger.debug("Starting queue management thread")
-            self._queue_management_thread = threading.Thread(target=self._queue_management_worker, name="HTEX-Queue-Management-Thread")
+            self._queue_management_thread = ProfileThread(target=self._queue_management_worker, name="HTEX-Queue-Management-Thread", save_dir=self.run_dir)
             self._queue_management_thread.daemon = True
             self._queue_management_thread.start()
             logger.debug("Started queue management thread")
