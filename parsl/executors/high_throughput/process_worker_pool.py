@@ -24,11 +24,12 @@ from parsl.process_loggers import wrap_with_logs
 from parsl.version import VERSION as PARSL_VERSION
 from parsl.app.errors import RemoteExceptionWrapper
 from parsl.executors.high_throughput.errors import WorkerLost
-from parsl.executors.high_throughput.profile_thread import ProfileThread
 from parsl.executors.high_throughput.probe import probe_addresses
 from parsl.multiprocessing import ForkProcess as mpProcess
 
 from parsl.multiprocessing import SizedQueue as mpQueue
+
+from parsl.threading import ProfileThread
 
 from parsl.serialize import unpack_apply_message, serialize
 
