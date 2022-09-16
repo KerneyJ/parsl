@@ -279,6 +279,8 @@ class Manager(object):
                     logger.critical("[TASK_PULL_THREAD] Received stop request")
                     kill_event.set()
                     break
+
+                # logger.info(f"[TASK_PULL_THREAD] Bytes necessary to store task: {len(pkl_msg)}")
                 tasks = pickle.loads(pkl_msg)
 
                 last_interchange_contact = time.time()
