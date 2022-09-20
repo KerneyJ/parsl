@@ -288,8 +288,18 @@ class Manager(object):
                     logger.debug("Got tasks: {}, cumulative count of tasks: {}".format([t['task_id'] for t in tasks], task_recv_counter))
 
                     for task in tasks:
-                        self.pending_task_queue.put(task)
-                        logger.info(f"Sent task {task['task_id']}")
+                        wait_time = 1 / 1000
+                        while True:
+                            try:
+                                self.pending_task_queue.put_nowait(task)
+                                break
+                            except:
+                                time.sleep(wait_time)
+                                if wait_time < 1/2:
+                                    wait_time *= 2
+                                continue
+                        # self.pending_task_queue.put(task) 
+                        # logger.info(f"Sent task {task['task_id']}")
                         # logger.debug("Ready tasks: {}".format(
                         #    [i['task_id'] for i in self.pending_task_queue]))
 

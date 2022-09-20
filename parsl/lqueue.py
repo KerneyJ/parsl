@@ -23,7 +23,7 @@ class LocklessQueue(object):
         self._wptr = 0
         self._rptr = 0
 
-    def get_nopoll(self):
+    def get_nowait(self):
         if self._buffer[self._rptr] == 0:
             raise queue.Empty
         length = int.from_bytes(self._buffer[self._rptr+1:self._rptr+17], self._BYTES_ORDER)
@@ -36,7 +36,7 @@ class LocklessQueue(object):
             self._rptr += LocklessQueue._BLOCK_SIZE
         return item
 
-    def put_nopoll(self, item):
+    def put_nowait(self, item):
         # check if queue is full
         # check if the write pointer is looking at the last position in the list try to loop it if so
         if self._buffer[self._wptr] == 255:
@@ -54,14 +54,16 @@ class LocklessQueue(object):
         else:
             self._wptr += LocklessQueue._BLOCK_SIZE
 
-    def get(self): # polls, make a sleep call, do exponential backoff(check fo 1 ms, 2 ms, 4ms, on and on until second
+# polls, make a sleep call, do exponential backoff(check fo 1 ms, 2 ms, 4ms, on and on until second
+    def get(self):
         start = time.time()
         wait_time = 1 / 1000 # 1 millisecond
         while True:
-            if (time.time() - start) > self._polltime: # break and raise exception when we've waited for more than 60 seconds
+            # break and raise exception when we've waited for more than 60 seconds
+            if (time.time() - start) > self._polltime:
                 break
             try:
-                item = self.get_nopoll()
+                item = self.get_nowait()
                 return item
             except:
                 time.sleep(wait_time)
@@ -70,17 +72,22 @@ class LocklessQueue(object):
                 continue
         raise queue.Empty
 
-    def put(self, item, wait_time=0.5): # poll change this to wait until there is a spot
+    # poll change this to wait until there is a spot
+    def put(self, item): # FIXME
+        # start = time.time()
         wait_time = 1 / 1000 
         while True:
+            # if (time.time() - start) > self._polltime:
+                # break
             try:
-                self.put_nopoll(item)
+                self.put_nowait(item)
                 break
             except:
                 time.sleep(wait_time)
                 if wait_time < 1:
                     wait_time *= 2
                 continue
+        # raise queue.Full
 
     def qsize(self):
         wpos = self._wptr / LocklessQueue._BLOCK_SIZE
