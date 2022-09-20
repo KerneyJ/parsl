@@ -27,6 +27,7 @@ from parsl.executors.high_throughput.probe import probe_addresses
 from parsl.multiprocessing import ForkProcess as mpProcess
 
 from parsl.multiprocessing import SizedQueue as mpQueue
+from parsl.lqueue import LocklessQueue as lQueue
 
 from parsl.serialize import unpack_apply_message, serialize
 
@@ -178,8 +179,8 @@ class Manager(object):
                                 mem_slots,
                                 math.floor(cores_on_node / cores_per_worker))
 
-        self.pending_task_queue = mpQueue()
-        self.pending_result_queue = mpQueue()
+        self.pending_task_queue = lQueue(maxsize=100)
+        self.pending_result_queue = lQueue(maxsize=100)
         self.ready_worker_queue = mpQueue()
 
         self.max_queue_size = self.prefetch_capacity + self.worker_count
@@ -288,6 +289,7 @@ class Manager(object):
 
                     for task in tasks:
                         self.pending_task_queue.put(task)
+                        logger.info(f"Sent task {task['task_id']}")
                         # logger.debug("Ready tasks: {}".format(
                         #    [i['task_id'] for i in self.pending_task_queue]))
 
@@ -328,7 +330,7 @@ class Manager(object):
         while not kill_event.is_set():
             try:
                 logger.debug("Starting pending_result_queue get")
-                r = self.pending_result_queue.get(block=True, timeout=push_poll_period)
+                r = self.pending_result_queue.get()
                 logger.debug("Got a result item")
                 items.append(r)
             except queue.Empty:
@@ -555,7 +557,11 @@ def worker(worker_id, pool_id, pool_size, task_queue, result_queue, worker_queue
         worker_queue.put(worker_id)
 
         # The worker will receive {'task_id':<tid>, 'buffer':<buf>}
-        req = task_queue.get()
+        try:
+            req = task_queue.get()
+        except Exception as e:
+            logger.info(f"task_queue.get generated exception {e}")
+            continue
         tasks_in_progress[worker_id] = req
         tid = req['task_id']
         logger.info("Received task {}".format(tid))
