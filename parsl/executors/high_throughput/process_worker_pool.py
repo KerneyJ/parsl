@@ -601,7 +601,17 @@ def worker(worker_id, pool_id, pool_size, task_queue, result_queue, worker_queue
                                         'exception': serialize(RemoteExceptionWrapper(*sys.exc_info()))
             })
 
-        result_queue.put(pkl_package)
+        #result_queue.put(pkl_package)
+        wait_time = 1 / 1000
+        while True:
+            try:
+                result_queue.put_nowait(pkl_package)
+                break
+            except:
+                time.sleep(wait_time)
+                if wait_time < 1:
+                    wait *= 2
+                continue
         tasks_in_progress.pop(worker_id)
         logger.info("All processing finished for task {}".format(tid))
 
