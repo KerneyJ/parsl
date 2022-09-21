@@ -567,11 +567,23 @@ def worker(worker_id, pool_id, pool_size, task_queue, result_queue, worker_queue
         worker_queue.put(worker_id)
 
         # The worker will receive {'task_id':<tid>, 'buffer':<buf>}
-        try:
-            req = task_queue.get()
-        except Exception as e:
-            logger.info(f"task_queue.get generated exception {e}")
-            continue
+        #try:
+        #    req = task_queue.get()
+        #except Exception as e:
+        #    logger.info(f"task_queue.get generated exception {e}")
+        #    continue
+        wait_time = 1/1000
+        req = None
+        while True:
+            try:
+                req = task_queue.get_nowait()
+                break
+            except:
+                time.sleep(wait_time)
+                if wait_time < 1:
+                    wait_time *= 2
+                continue
+
         tasks_in_progress[worker_id] = req
         tid = req['task_id']
         logger.info("Received task {}".format(tid))
