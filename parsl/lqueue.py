@@ -4,6 +4,7 @@ import time
 import traceback
 
 from multiprocessing import shared_memory
+from multiprocessing import RLock
 
 # Check for improvement in the range 10% 20% and above
 # if there is trouble with parsl then do microbenchmark
@@ -22,6 +23,7 @@ class LocklessQueue(object):
         self._buffer = self._shm.buf
         self._wptr = 0
         self._rptr = 0
+        self._rlock = RLock()
 
     def get_nopoll(self):
         if self._buffer[self._rptr] == 0:
@@ -54,33 +56,45 @@ class LocklessQueue(object):
         else:
             self._wptr += LocklessQueue._BLOCK_SIZE
 
-    def get(self): # polls, make a sleep call, do exponential backoff(check fo 1 ms, 2 ms, 4ms, on and on until second
+    def get(self, logger=None): # polls, make a sleep call, do exponential backoff(check fo 1 ms, 2 ms, 4ms, on and on until second
         start = time.time()
         wait_time = 1 / 1000 # 1 millisecond
+        self._rlock.acquire()
         while True:
             if (time.time() - start) > self._polltime: # break and raise exception when we've waited for more than 60 seconds
+                self._rlock.release()
                 break
             try:
                 item = self.get_nopoll()
+                self._rlock.release()
                 return item
             except:
+                if logger:
+                    logger.info(f"get failed: rptr {self._rptr} -> {self._buffer[self._rptr]} == 255")
                 time.sleep(wait_time)
                 if wait_time < 1:
                     wait_time *= 2
                 continue
         raise queue.Empty
 
-    def put(self, item, wait_time=0.5): # poll change this to wait until there is a spot
-        wait_time = 1 / 1000 
+    def put(self, item, logger=None): # poll change this to wait until there is a spot
+        wait_time = 1 / 1000
+        tot_time = time.time()
+        self._rlock.acquire()
         while True:
             try:
                 self.put_nopoll(item)
+                self._rlock.release()
                 break
             except:
+                if logger:
+                    logger.info(f"put failed: wptr {self._wptr} -> {self._buffer[self._wptr]} == 0")
                 time.sleep(wait_time)
                 if wait_time < 1:
                     wait_time *= 2
                 continue
+        if logger:
+            logger.info(f"put succeded: total time {time.time() - tot_time}")
 
     def qsize(self):
         wpos = self._wptr / LocklessQueue._BLOCK_SIZE
