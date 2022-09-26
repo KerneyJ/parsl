@@ -179,8 +179,8 @@ class Manager(object):
                                 mem_slots,
                                 math.floor(cores_on_node / cores_per_worker))
 
-        self.pending_task_queue = lQueue(maxsize=100, polltime=5)
-        self.pending_result_queue = lQueue(maxsize=100, polltime=5)
+        self.pending_task_queue = lQueue(maxsize=100, polltime=.5)
+        self.pending_result_queue = lQueue(maxsize=100, polltime=.5)
         self.ready_worker_queue = mpQueue()
 
         self.max_queue_size = self.prefetch_capacity + self.worker_count
