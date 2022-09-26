@@ -121,24 +121,16 @@ class LocklessQueue(object):
 class PipeQueue(object):
 
     def __init__(self):
-        self._reader, self._writer = multiprocessing.Pipe(duplex=False)
+        self._reader, self._writer = Pipe(duplex=False)
 
     def put_nowait(self, item):
-        b = bytearray(10000)
-        bitem = pickle.dumps(item)
-        b[0:len(bitem)] = bitem
-        self._writer.send_bytes(item)
+        self._writer.send(item)
 
     def put(self, item):
         self.put_nowait(item)
 
-    def get_nowait(self, btoread=10000):
-        buf = bytearray(toread)
-        offset = 0
-        while btoread:
-            offset = self._reader.recv_bytes_into(buf, offset)
-            toread -= offset
-        return pickle.loads(buf)
+    def get_nowait(self):
+        return self._reader.recv()
 
     def get(self):
         return self.get_nowait()
