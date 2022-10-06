@@ -213,6 +213,7 @@ class Interchange(object):
         for i in range(0, count):
             try:
                 x = self.pending_task_queue.get(block=False)
+                x["g_int->int"] = time.time()
             except queue.Empty:
                 break
             else:
@@ -227,20 +228,28 @@ class Interchange(object):
         """
         logger.info("Starting")
         task_counter = 0
+        first_time = None
 
         while True:
             logger.debug("launching recv_pyobj")
             try:
                 msg = self.task_incoming.recv_pyobj()
+                msg["r_exc->int"] = time.time()
             except zmq.Again:
                 # We just timed out while attempting to receive
                 logger.debug("zmq.Again with {} tasks in internal queue".format(self.pending_task_queue.qsize()))
                 continue
 
+            if not first_time:
+                first_time = msg["s_exc->int"]
             logger.debug("putting message onto pending_task_queue")
+            msg["p_int->int"] = time.time()
             self.pending_task_queue.put(msg)
             task_counter += 1
             logger.debug(f"Fetched {task_counter} tasks so far")
+            if msg["s_exc->int"] - first_time != 0:
+                logger.info(f"Average task per second sent: " \
+                            f"{task_counter / (msg['s_exc->int'] - first_time)}")
 
     def _create_monitoring_channel(self):
         if self.hub_address and self.hub_port:
@@ -453,6 +462,8 @@ class Interchange(object):
                     if (real_capacity and m['active']):
                         tasks = self.get_tasks(real_capacity)
                         if tasks:
+                            for i in range(len(tasks)):
+                                tasks[i]["s_int->man"] = time.time()
                             self.task_outgoing.send_multipart([manager_id, b'', pickle.dumps(tasks)])
                             task_count = len(tasks)
                             count += task_count

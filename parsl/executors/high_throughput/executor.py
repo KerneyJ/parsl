@@ -1,6 +1,7 @@
 from concurrent.futures import Future
 import typeguard
 import logging
+import time
 import threading
 import queue
 import datetime
@@ -583,7 +584,8 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
             raise SerializationError(func.__name__)
 
         msg = {"task_id": task_id,
-               "buffer": fn_buf}
+               "buffer": fn_buf,
+               "s_exc->int": time.time()}
 
         # Post task to the the outgoing queue
         self.outgoing_q.put(msg)

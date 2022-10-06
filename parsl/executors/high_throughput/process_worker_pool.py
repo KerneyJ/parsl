@@ -272,6 +272,8 @@ class Manager(object):
                 poll_timer = 0
                 _, pkl_msg = self.task_incoming.recv_multipart()
                 tasks = pickle.loads(pkl_msg)
+                for i in range(len(tasks)):
+                    tasks[i]['r_int->man'] = time.time()
                 last_interchange_contact = time.time()
 
                 if tasks == 'STOP':
@@ -287,6 +289,7 @@ class Manager(object):
                     logger.debug("Got tasks: {}, cumulative count of tasks: {}".format([t['task_id'] for t in tasks], task_recv_counter))
 
                     for task in tasks:
+                        task['s_man->wor'] = time.time()
                         self.pending_task_queue.put(task)
                         # logger.debug("Ready tasks: {}".format(
                         #    [i['task_id'] for i in self.pending_task_queue]))
@@ -556,6 +559,7 @@ def worker(worker_id, pool_id, pool_size, task_queue, result_queue, worker_queue
 
         # The worker will receive {'task_id':<tid>, 'buffer':<buf>}
         req = task_queue.get()
+        req['r_man->wor'] = time.time()
         tasks_in_progress[worker_id] = req
         tid = req['task_id']
         logger.info("Received task {}".format(tid))
@@ -568,6 +572,7 @@ def worker(worker_id, pool_id, pool_size, task_queue, result_queue, worker_queue
 
         try:
             result = execute_task(req['buffer'])
+            req['buffer'] = 0
             serialized_result = serialize(result, buffer_threshold=1e6)
         except Exception as e:
             logger.info('Caught an exception: {}'.format(e))
@@ -576,7 +581,13 @@ def worker(worker_id, pool_id, pool_size, task_queue, result_queue, worker_queue
             result_package = {'type': 'result', 'task_id': tid, 'result': serialized_result}
             # logger.debug("Result: {}".format(result))
 
-        logger.info("Completed task {}".format(tid))
+        logger.info(f"Completed task {tid}")
+        logger.info(f"Time stats: \n" \
+                    f"exc->int: {req['r_exc->int']-req['s_exc->int']}\n" \
+                    f"int->int: {req['g_int->int']-req['p_int->int']}\n" \
+                    f"int->man: {req['r_int->man']-req['s_int->man']}\n" \
+                    f"man->wor: {req['r_man->wor']-req['s_man->wor']}" \
+                )
         try:
             pkl_package = pickle.dumps(result_package)
         except Exception:
