@@ -11,7 +11,7 @@ from typing import Dict, Sequence  # noqa F401 (used in type annotation)
 from typing import List, Optional, Tuple, Union
 import math
 
-from parsl.serialize import pack_apply_message, deserialize
+from parsl.serialize import pack_apply_message, deserialize, serialize, unpack_apply_message
 from parsl.app.errors import RemoteExceptionWrapper
 from parsl.executors.high_throughput import zmq_pipes
 from parsl.executors.high_throughput import interchange
@@ -27,7 +27,7 @@ from parsl.data_provider.staging import Staging
 from parsl.addresses import get_all_addresses
 from parsl.process_loggers import wrap_with_logs
 
-from parsl.multiprocessing import ForkProcess
+from parsl.multiprocessing import ForkProcess, SizedQueue as mpQueue
 from parsl.utils import RepresentationMixin
 from parsl.providers import LocalProvider
 
@@ -333,6 +333,9 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
         self.incoming_q = zmq_pipes.ResultsIncoming("127.0.0.1", self.interchange_port_range)
         self.command_client = zmq_pipes.CommandClient("127.0.0.1", self.interchange_port_range)
 
+        self.task_queue = mpQueue()
+        self.result_queue = mpQueue()
+
         self.is_alive = True
 
         self._queue_management_thread = None
@@ -342,6 +345,11 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
         logger.debug("Created management thread: {}".format(self._queue_management_thread))
 
         block_ids = self.initialize_scaling()
+        self.workers = []
+        for i in range(self._workers_per_node * self.provider.nodes_per_block):
+            w = ForkProcess(target=worker, args=(i, f"{self.run_dir}/{self.label}", self.task_queue, self.result_queue))
+            w.start()
+            self.workers.append(w)
         return block_ids
 
     @wrap_with_logs
@@ -370,7 +378,7 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
 
         while not self.bad_state_is_set:
             try:
-                msgs = self.incoming_q.get(timeout=1)
+                msg = self.result_queue.get(timeout=1)
 
             except queue.Empty:
                 logger.debug("[MTHREAD] queue empty")
@@ -387,58 +395,58 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
 
             else:
 
-                if msgs is None:
+                if msg is None:
                     logger.debug("[MTHREAD] Got None, exiting")
                     return
 
                 else:
-                    for serialized_msg in msgs:
+                    logger.info(f"Got message: {msg}")
+                    try:
+                        msg = pickle.loads(msg)
+                    except pickle.UnpicklingError:
+                        raise BadMessage("Message received could not be unpickled")
+
+                    if msg['type'] == 'heartbeat':
+                        continue
+                    elif msg['type'] == 'result':
                         try:
-                            msg = pickle.loads(serialized_msg)
-                        except pickle.UnpicklingError:
-                            raise BadMessage("Message received could not be unpickled")
+                            tid = msg['task_id']
+                        except Exception:
+                            raise BadMessage("Message received does not contain 'task_id' field")
 
-                        if msg['type'] == 'heartbeat':
-                            continue
-                        elif msg['type'] == 'result':
+                        if tid == -1 and 'exception' in msg:
+                            logger.warning("Executor shutting down due to exception from interchange")
+                            exception = deserialize(msg['exception'])
+                            self.set_bad_state_and_fail_all(exception)
+                            break
+
+                        task_fut = self.tasks.pop(tid)
+
+                        if 'result' in msg:
+                            result = deserialize(msg['result'])
+                            task_fut.set_result(result)
+
+                        elif 'exception' in msg:
                             try:
-                                tid = msg['task_id']
-                            except Exception:
-                                raise BadMessage("Message received does not contain 'task_id' field")
-
-                            if tid == -1 and 'exception' in msg:
-                                logger.warning("Executor shutting down due to exception from interchange")
-                                exception = deserialize(msg['exception'])
-                                self.set_bad_state_and_fail_all(exception)
-                                break
-
-                            task_fut = self.tasks.pop(tid)
-
-                            if 'result' in msg:
-                                result = deserialize(msg['result'])
-                                task_fut.set_result(result)
-
-                            elif 'exception' in msg:
-                                try:
-                                    s = deserialize(msg['exception'])
-                                    # s should be a RemoteExceptionWrapper... so we can reraise it
-                                    if isinstance(s, RemoteExceptionWrapper):
-                                        try:
-                                            s.reraise()
-                                        except Exception as e:
-                                            task_fut.set_exception(e)
-                                    elif isinstance(s, Exception):
-                                        task_fut.set_exception(s)
-                                    else:
-                                        raise ValueError("Unknown exception-like type received: {}".format(type(s)))
-                                except Exception as e:
-                                    # TODO could be a proper wrapped exception?
-                                    task_fut.set_exception(
-                                        DeserializationError("Received exception, but handling also threw an exception: {}".format(e)))
-                            else:
-                                raise BadMessage("Message received is neither result or exception")
+                                s = deserialize(msg['exception'])
+                                # s should be a RemoteExceptionWrapper... so we can reraise it
+                                if isinstance(s, RemoteExceptionWrapper):
+                                    try:
+                                        s.reraise()
+                                    except Exception as e:
+                                        task_fut.set_exception(e)
+                                elif isinstance(s, Exception):
+                                    task_fut.set_exception(s)
+                                else:
+                                    raise ValueError("Unknown exception-like type received: {}".format(type(s)))
+                            except Exception as e:
+                                # TODO could be a proper wrapped exception?
+                                task_fut.set_exception(
+                                    DeserializationError("Received exception, but handling also threw an exception: {}".format(e)))
                         else:
-                            raise BadMessage("Message received with unknown type {}".format(msg['type']))
+                            raise BadMessage("Message received is neither result or exception")
+                    else:
+                        raise BadMessage("Message received with unknown type {}".format(msg['type']))
 
             if not self.is_alive:
                 break
@@ -588,7 +596,7 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
                "s_exc->int": time.time()}
 
         # Post task to the the outgoing queue
-        self.outgoing_q.put(msg)
+        self.task_queue.put(msg)
 
         # Return the future
         return fut
@@ -712,3 +720,115 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
         logger.info("Attempting HighThroughputExecutor shutdown")
         self.interchange_proc.terminate()
         logger.info("Finished HighThroughputExecutor shutdown attempt")
+        for w in self.workers:
+            w.terminate()
+
+        logger.info("Workers shutdown")
+
+def execute_task(bufs):
+    """Deserialize the buffer and execute the task.
+
+    Returns the result or throws exception.
+    """
+    user_ns = locals()
+    user_ns.update({'__builtins__': __builtins__})
+
+    f, args, kwargs = unpack_apply_message(bufs, user_ns, copy=False)
+
+    # We might need to look into callability of the function from itself
+    # since we change it's name in the new namespace
+    prefix = "parsl_"
+    fname = prefix + "f"
+    argname = prefix + "args"
+    kwargname = prefix + "kwargs"
+    resultname = prefix + "result"
+
+    user_ns.update({fname: f,
+                    argname: args,
+                    kwargname: kwargs,
+                    resultname: resultname})
+
+    code = "{0} = {1}(*{2}, **{3})".format(resultname, fname,
+                                           argname, kwargname)
+    exec(code, user_ns, user_ns)
+    return user_ns.get(resultname)
+
+
+def worker(worker_id, logdir, task_queue, result_queue):
+    """
+
+    Put request token into queue
+    Get task from task_queue
+    Pop request from queue
+    Put result into result_queue
+    """
+
+    # override the global logger inherited from zthe __main__ process (which
+    # usually logs to manager.log) with one specific to this worker.
+
+    wlogger = start_file_logger('{}/worker_{}.log'.format(logdir, worker_id),
+                               worker_id,
+                               name="worker_log",
+                               level=logging.INFO)
+
+    # share the result queue with monitoring code so it too can send results down that channel
+    import parsl.executors.high_throughput.monitoring_info as mi
+    mi.result_queue = result_queue
+
+    # Sync worker with master
+    wlogger.info('Worker {} started'.format(worker_id))
+
+    while True:
+        # The worker will receive {'task_id':<tid>, 'buffer':<buf>}
+        req = task_queue.get()
+        tid = req['task_id']
+        wlogger.info("Received task {}".format(tid))
+
+        try:
+            result = execute_task(req['buffer'])
+            serialized_result = serialize(result, buffer_threshold=1e6)
+        except Exception as e:
+            wlogger.info('Caught an exception: {}'.format(e))
+            result_package = {'type': 'result', 'task_id': tid, 'exception': serialize(RemoteExceptionWrapper(*sys.exc_info()))}
+        else:
+            result_package = {'type': 'result', 'task_id': tid, 'result': serialized_result}
+            wlogger.info("Result: {}".format(result))
+
+        wlogger.info("Completed task {}".format(tid))
+        try:
+            pkl_package = pickle.dumps(result_package)
+        except Exception:
+            wlogger.exception("Caught exception while trying to pickle the result package")
+            pkl_package = pickle.dumps({'type': 'result', 'task_id': tid,
+                                        'exception': serialize(RemoteExceptionWrapper(*sys.exc_info()))
+            })
+
+        result_queue.put(pkl_package)
+        wlogger.info("All processing finished for task {}".format(tid))
+
+
+def start_file_logger(filename, rank, name='parsl', level=logging.DEBUG, format_string=None):
+    """Add a stream log handler.
+
+    Args:
+        - filename (string): Name of the file to write logs to
+        - name (string): Logger name
+        - level (logging.LEVEL): Set the logging level.
+        - format_string (string): Set the format string
+
+    Returns:
+       -  None
+    """
+    if format_string is None:
+        format_string = "%(asctime)s.%(msecs)03d %(name)s:%(lineno)d " \
+                        "%(process)d %(threadName)s " \
+                        "[%(levelname)s]  %(message)s"
+
+    l = logging.getLogger(name)
+    l.setLevel(logging.DEBUG)
+    handler = logging.FileHandler(filename)
+    handler.setLevel(level)
+    formatter = logging.Formatter(format_string, datefmt='%Y-%m-%d %H:%M:%S')
+    handler.setFormatter(formatter)
+    l.addHandler(handler)
+    return l
