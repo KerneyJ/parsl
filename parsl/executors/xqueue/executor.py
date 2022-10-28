@@ -1,9 +1,11 @@
 from concurrent.futures import Future
+import os
 import typeguard
 import logging
 import threading
 import queue
 import datetime
+import time
 import pickle
 from typing import Dict, Sequence  # noqa F401 (used in type annotation)
 from typing import List, Optional, Tuple, Union
@@ -38,19 +40,25 @@ class XQExecutor(NoStatusHandlingExecutor, RepresentationMixin):
                  max_workers: Union[int, float] = float('inf'),
                  prefetch_capacity: int = 0,
                  poll_period: int = 10):
-        NoStatusHandlingExecutor.__init__()
-        logger.debug("Initializing XQExecutor")
+        NoStatusHandlingExecutor.__init__(self)
+        logger.info("Initializing XQExecutor")
+        logger.info(f"Working directory: {working_dir}")
 
         self.label = label
         self.worker_debug = worker_debug
         self.working_dir = working_dir
-        self.max_workers = max_workers 
-
+        self.max_workers = max_workers
+        self.prefetch_capacity = prefetch_capacity
+        self.managed = True
         self._task_counter = 0
-        self.tasks = {}
         self.run_id = None  # set to the correct run_id in dfk
         self.poll_period = poll_period
         self.run_dir = '.'
+
+        self.e = 0.0
+        self.q = 0.0
+        self.w = 0.0
+        self.rc = 0
 
     def start(self):
         """Create the Interchange process and connect to it.
@@ -65,13 +73,20 @@ class XQExecutor(NoStatusHandlingExecutor, RepresentationMixin):
         self._start_queue_management_thread()
 
         # start workers
+        worker_logdir = f"{self.run_dir}/{self.label}"
+        os.makedirs(worker_logdir)
         for i in range(self.max_workers):
             tq = mpQueue()
-            w = ForkProcess(targer=worker, args=(i, self.working_directory, tq, self.incoming_q))
+            w = ForkProcess(target=worker, args=(i, worker_logdir, tq, self.incoming_q))
             self.outgoing_qs.append(tq)
             self.workers.append(w)
+            w.start()
 
         logger.debug("Created management thread: {}".format(self._queue_management_thread))
+        logger.info(f"Worker log directory: {worker_logdir}")
+
+    def scale_out(self, blocks):
+        return
 
     @wrap_with_logs
     def _queue_management_worker(self):
@@ -103,8 +118,8 @@ class XQExecutor(NoStatusHandlingExecutor, RepresentationMixin):
 
             except queue.Empty:
                 logger.debug("[MTHREAD] queue empty")
+                logger.info(f"[MTHREAD] Check workers alive: {[w.is_alive() for w in self.workers]}")
                 # Timed out.
-                pass
 
             except IOError as e:
                 logger.exception("[MTHREAD] Caught broken queue with exception code {}: {}".format(e.errno, e))
@@ -142,6 +157,12 @@ class XQExecutor(NoStatusHandlingExecutor, RepresentationMixin):
                             if 'result' in msg:
                                 result = deserialize(msg['result'])
                                 task_fut.set_result(result)
+
+                                self.e += msg['s_exc->wor'] - msg['r_dfk->exc']
+                                self.q += msg['r_exc->wor'] - msg['s_exc->wor']
+                                self.w += msg['comp']       - msg['r_exc->wor']
+
+                                self.rc += 1
 
                             elif 'exception' in msg:
                                 try:
@@ -202,6 +223,7 @@ class XQExecutor(NoStatusHandlingExecutor, RepresentationMixin):
         Returns:
               Future
         """
+        exc = time.time()
         if resource_specification:
             logger.error("Ignoring the resource specification. "
                          "Parsl resource specification is not supported in HighThroughput Executor. "
@@ -231,7 +253,9 @@ class XQExecutor(NoStatusHandlingExecutor, RepresentationMixin):
             raise SerializationError(func.__name__)
 
         msg = {"task_id": task_id,
-               "buffer": fn_buf}
+               "buffer": fn_buf,
+               "r_dfk->exc": exc,
+               "s_exc->wor": time.time()}
 
         # TODO give it to task_count % worker
         self.outgoing_qs[task_id % len(self.workers)].put(msg)
@@ -249,14 +273,22 @@ class XQExecutor(NoStatusHandlingExecutor, RepresentationMixin):
         """
         return
 
+    def scale_in(self, blocks):
+        return
+
     def shutdown(self):
         """Shutdown the executor, including all workers and controllers.
         """
 
+        logger.info("Average amount of time tasks spend in each component\n" \
+                    f"\texecutor: {self.e / self.rc}\n"\
+                    f"\tqueue:    {self.q / self.rc}\n"\
+                    f"\tworker:   {self.w / self.rc}\n"\
+                )
+
         logger.info("Attempting HighThroughputExecutor shutdown")
-        # TODO kill the workers
         for w in self.workers:
-            w.terminate()
+            w.kill()
         logger.info("Finished HighThroughputExecutor shutdown attempt")
 
 def execute_task(bufs):
@@ -300,10 +332,7 @@ def worker(worker_id, logdir, task_queue, result_queue):
     # override the global logger inherited from zthe __main__ process (which
     # usually logs to manager.log) with one specific to this worker.
 
-    wlogger = start_file_logger('{}/worker_{}.log'.format(logdir, worker_id),
-                               worker_id,
-                               name="worker_log",
-                               level=logging.INFO)
+    wlogger = start_file_logger('{}/worker_{}.log'.format(logdir, worker_id), worker_id, name="worker_log", level=logging.INFO)
 
     # Sync worker with master
     wlogger.info('Worker {} started'.format(worker_id))
@@ -311,6 +340,7 @@ def worker(worker_id, logdir, task_queue, result_queue):
     while True:
         # The worker will receive {'task_id':<tid>, 'buffer':<buf>}
         req = task_queue.get()
+        rec = time.time()
         tid = req['task_id']
         wlogger.info("Received task {}".format(tid))
 
@@ -321,7 +351,11 @@ def worker(worker_id, logdir, task_queue, result_queue):
             wlogger.info('Caught an exception: {}'.format(e))
             result_package = {'type': 'result', 'task_id': tid, 'exception': serialize(RemoteExceptionWrapper(*sys.exc_info()))}
         else:
-            result_package = {'type': 'result', 'task_id': tid, 'result': serialized_result}
+            result_package = {'type': 'result', 'task_id': tid, 'result': serialized_result,
+                              'r_dfk->exc': req['r_dfk->exc'],
+                              's_exc->wor': req['s_exc->wor'], 'r_exc->wor': rec,
+                              'comp': time.time()
+                              }
             wlogger.info("Result: {}".format(result))
 
         wlogger.info("Completed task {}".format(tid))
