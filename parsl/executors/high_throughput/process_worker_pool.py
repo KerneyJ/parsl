@@ -578,16 +578,17 @@ def worker(worker_id, pool_id, pool_size, task_queue, result_queue, worker_queue
             logger.info('Caught an exception: {}'.format(e))
             result_package = {'type': 'result', 'task_id': tid, 'exception': serialize(RemoteExceptionWrapper(*sys.exc_info()))}
         else:
-            result_package = {'type': 'result', 'task_id': tid, 'result': serialized_result}
+            result_package = {'type': 'result', 'task_id': tid, 'result': serialized_result,
+                              'exc_time': req['exc_time'], 
+                              'r_exc->int': req['r_exc->int'],  's_exc->int': req['s_exc->int'],
+                              'g_int->int': req['g_int->int'],  'p_int->int': req['p_int->int'],
+                              'r_int->man': req['r_int->man'],  's_int->man': req['s_int->man'],
+                              'r_man->wor': req['r_man->wor'],  's_man->wor': req['s_man->wor'],
+                              'comp_time': time.time()
+                              }
             # logger.debug("Result: {}".format(result))
 
         logger.info(f"Completed task {tid}")
-        logger.info(f"Time stats: \n" \
-                    f"exc->int: {req['r_exc->int']-req['s_exc->int']}\n" \
-                    f"int->int: {req['g_int->int']-req['p_int->int']}\n" \
-                    f"int->man: {req['r_int->man']-req['s_int->man']}\n" \
-                    f"man->wor: {req['r_man->wor']-req['s_man->wor']}" \
-                )
         try:
             pkl_package = pickle.dumps(result_package)
         except Exception:

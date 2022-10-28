@@ -259,6 +259,13 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
         self.worker_logdir_root = worker_logdir_root
         self.cpu_affinity = cpu_affinity
 
+        # The below variables are for task tagging
+        self.ei = 0.0;
+        self.ii = 0.0;
+        self.im = 0.0;
+        self.mw = 0.0;
+        self.rc = 0;
+
         if not launch_cmd:
             self.launch_cmd = ("process_worker_pool.py {debug} {max_workers} "
                                "-a {addresses} "
@@ -416,7 +423,16 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
 
                             if 'result' in msg:
                                 result = deserialize(msg['result'])
+
                                 task_fut.set_result(result)
+
+                                self.ei += msg['r_exc->int'] - msg['s_exc->int']
+                                self.ii += msg['g_int->int'] - msg['p_int->int']
+                                self.im += msg['r_int->man'] - msg['s_int->man']
+                                self.mw += msg['r_man->wor'] - msg['s_man->wor']
+
+
+                                self.rc += 1
 
                             elif 'exception' in msg:
                                 try:
@@ -555,6 +571,7 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
         Returns:
               Future
         """
+        exc_time = time.time() # the timestamp when we have entered the executor
         if resource_specification:
             logger.error("Ignoring the resource specification. "
                          "Parsl resource specification is not supported in HighThroughput Executor. "
@@ -585,6 +602,7 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
 
         msg = {"task_id": task_id,
                "buffer": fn_buf,
+               "exc_time": exc_time,
                "s_exc->int": time.time()}
 
         # Post task to the the outgoing queue
@@ -712,3 +730,11 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
         logger.info("Attempting HighThroughputExecutor shutdown")
         self.interchange_proc.terminate()
         logger.info("Finished HighThroughputExecutor shutdown attempt")
+
+        # log the tagging results
+        logger.info(f"Average amount of time task spent in each section\n" \
+                    f"executor -> interchange: {self.ei / self.rc}\n" \
+                    f"interchange -> interchange: {self.ii / self.rc }\n" \
+                    f"interchange -> manager: {self.im / self.rc}\n" \
+                    f"manager -> worker: {self.mw / self.rc}\n" \
+                )
