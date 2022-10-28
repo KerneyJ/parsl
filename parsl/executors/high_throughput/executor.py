@@ -260,11 +260,24 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
         self.cpu_affinity = cpu_affinity
 
         # The below variables are for task tagging
-        self.ei = 0.0;
-        self.ii = 0.0;
-        self.im = 0.0;
-        self.mw = 0.0;
-        self.rc = 0;
+        self.ex = 0.0
+
+        self.ei = 0.0
+
+        self.it = 0.0
+        self.tp = 0.0
+        self.tm = 0.0
+        self.mt = 0.0
+
+        self.im = 0.0
+
+        self.mn = 0.0
+
+        self.mw = 0.0
+
+        self.wr = 0.0
+
+        self.rc = 0
 
         if not launch_cmd:
             self.launch_cmd = ("process_worker_pool.py {debug} {max_workers} "
@@ -425,11 +438,17 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
                                 result = deserialize(msg['result'])
 
                                 task_fut.set_result(result)
-
-                                self.ei += msg['r_exc->int'] - msg['s_exc->int']
-                                self.ii += msg['g_int->int'] - msg['p_int->int']
-                                self.im += msg['r_int->man'] - msg['s_int->man']
-                                self.mw += msg['r_man->wor'] - msg['s_man->wor']
+                                # Calculate time spent in each section
+                                self.ex += msg['s_exc->int'] - msg['exc_time']   # executor
+                                self.ei += msg['r_exc->int'] - msg['s_exc->int'] # executor to interchange
+                                self.it += msg['s_int->man'] - msg['r_exc->int'] # total interchange
+                                self.tp += msg['r_exc->int'] - msg['p_int->int'] # task puller interchange thread
+                                self.mt += msg['s_int->man'] - msg['g_int->int'] # main interchange thread
+                                self.tm += msg['g_int->int'] - msg['p_int->int'] # task puller to main
+                                self.im += msg['r_int->man'] - msg['s_int->man'] # interchange to manager
+                                self.mn += msg['s_man->wor'] - msg['r_int->man'] # manager
+                                self.mw += msg['r_man->wor'] - msg['s_man->wor'] # manager to worker
+                                self.wr += msg['comp_time']  - msg['r_man->wor'] # worker
 
 
                                 self.rc += 1
@@ -732,9 +751,15 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
         logger.info("Finished HighThroughputExecutor shutdown attempt")
 
         # log the tagging results
-        logger.info(f"Average amount of time task spent in each section\n" \
+        logger.info(f"Average amount of time task spent in each section(total task {self.rc})\n" \
+                    f"executor: {self.ex / self.rc}\n" \
                     f"executor -> interchange: {self.ei / self.rc}\n" \
-                    f"interchange -> interchange: {self.ii / self.rc }\n" \
+                    f"Total Interchange: {self.it / self.rc}\n" \
+                    f"\ttask puller interchange thread: {self.tp / self.rc}\n" \
+                    f"\ttask puller -> main: {self.tm / self.rc}\n" \
+                    f"\tmain interchange thread:{self.mt / self.rc}\n" \
                     f"interchange -> manager: {self.im / self.rc}\n" \
+                    f"manager: {self.mn / self.rc}\n" \
                     f"manager -> worker: {self.mw / self.rc}\n" \
+                    f"worker: {self.wr / self.rc}\n" \
                 )
