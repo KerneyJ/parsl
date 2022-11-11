@@ -188,6 +188,7 @@ class DataFlowKernel(object):
                 self._checkpoint_timer = Timer(self.checkpoint, interval=(30 * 60), name="Checkpoint")
 
         self.task_count = 0
+        self.submit_time = 0
         self.tasks: Dict[int, TaskRecord] = {}
         self.submitter_lock = threading.Lock()
 
@@ -830,7 +831,7 @@ class DataFlowKernel(object):
                (AppFuture) [DataFutures,]
 
         """
-
+        start = time.time()
         if ignore_for_cache is None:
             ignore_for_cache = []
 
@@ -909,7 +910,7 @@ class DataFlowKernel(object):
         assert task_id not in self.tasks
 
         self.tasks[task_id] = task_def
-
+        chkp1 = time.time()
         # Get the list of dependencies for the task
         depends = self._gather_all_deps(app_args, app_kwargs)
         task_def['depends'] = depends
@@ -959,9 +960,10 @@ class DataFlowKernel(object):
                 d.add_done_callback(callback_adapter)
             except Exception as e:
                 logger.error("add_done_callback got an exception {} which will be ignored".format(e))
-
+        chkp2 = time.time()
         self.launch_if_ready(task_def)
-
+        end = time.time()
+        self.submit_time += (chkp1 - start) + (end - chkp2)
         return app_fu
 
     # it might also be interesting to assert that all DFK
@@ -1137,7 +1139,8 @@ class DataFlowKernel(object):
             logger.info("Terminating monitoring")
             self.monitoring.close()
             logger.info("Terminated monitoring")
-
+        
+        logger.info(f"Average task submit time: {self.submit_time / self.task_count}")
         logger.info("DFK cleanup complete")
 
     def checkpoint(self, tasks: Optional[Sequence[TaskRecord]] = None) -> str:
