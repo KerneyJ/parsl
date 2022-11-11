@@ -964,6 +964,8 @@ class DataFlowKernel(object):
         self.launch_if_ready(task_def)
         end = time.time()
         self.submit_time += (chkp1 - start) + (end - chkp2)
+        if self.task_count % 100 == 0:
+            logger.info(f"Average task submit time: {self.submit_time / 100}")
         return app_fu
 
     # it might also be interesting to assert that all DFK
