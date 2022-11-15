@@ -279,12 +279,14 @@ class XQExecutor(NoStatusHandlingExecutor, RepresentationMixin):
     def shutdown(self):
         """Shutdown the executor, including all workers and controllers.
         """
-
-        logger.info("Average amount of time tasks spend in each component\n" \
+        try:
+            logger.info("Average amount of time tasks spend in each component\n" \
                     f"\texecutor: {self.e / self.rc}\n"\
                     f"\tqueue:    {self.q / self.rc}\n"\
                     f"\tworker:   {self.w / self.rc}\n"\
-                )
+            )
+        except ZeroDivisionError:
+            pass
 
         logger.info("Attempting HighThroughputExecutor shutdown")
         for w in self.workers:
