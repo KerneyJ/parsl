@@ -190,12 +190,14 @@ class DataFlowKernel(object):
         self.task_count = 0
         self.submit_time = 0.0
         self.lir_time = 0.0
-        self.chkp = [0.0] * 20
+        self.chkp = [[0] * 20, [0] * 8]
+        self.tasks_per_chkp = 1000
         self.batch = 0
+        self.lir_batch = 0
         self.submit_calls = 0 # calls to submit
         self.lir_calls = 0 # calls to launch if ready
         self.submit_file = open(f"{self.run_dir}/submit.csv", "w")
-        # self.lir_file = open(f"{self.run_dir}/lir.csv", "w")
+        self.lir_file = open(f"{self.run_dir}/lir.csv", "w")
         self.tasks: Dict[int, TaskRecord] = {}
         self.submitter_lock = threading.Lock()
 
@@ -521,27 +523,38 @@ class DataFlowKernel(object):
         or callback.
         """
         start = time.process_time_ns()
-        self.lir_calls += 1
         exec_fu = None
 
+        # chkp 1
         task_id = task_record['id']
+
+        chkp1 = time.process_time_ns()
+        # chkp 2
         with task_record['task_launch_lock']:
 
+            chkp2 = time.process_time_ns()
+            # chkp 3
             if task_record['status'] != States.pending:
                 logger.debug(f"Task {task_id} is not pending, so launch_if_ready skipping")
                 return
 
+            chkp3 = time.process_time_ns()
+            # chkp 4
             if self._count_deps(task_record['depends']) != 0:
                 logger.debug(f"Task {task_id} has outstanding dependencies, so launch_if_ready skipping")
                 return
 
             # We can now launch the task or handle any dependency failures
 
+            chkp4 = time.process_time_ns()
+            # chkp 5
             new_args, kwargs, exceptions_tids = self._unwrap_futures(task_record['args'],
                                                                      task_record['kwargs'])
             task_record['args'] = new_args
             task_record['kwargs'] = kwargs
 
+            chkp5 = time.process_time_ns()
+            # chkp 6
             if not exceptions_tids:
                 # There are no dependency errors
                 try:
@@ -570,6 +583,8 @@ class DataFlowKernel(object):
                 exec_fu.set_exception(DependencyError(exceptions_tids,
                                                       task_id))
 
+        chkp6 = time.process_time_ns()
+        # chkp 7
         if exec_fu:
             assert isinstance(exec_fu, Future)
             try:
@@ -584,7 +599,19 @@ class DataFlowKernel(object):
 
             task_record['exec_fu'] = exec_fu
         end = time.process_time_ns()
-        self.lir_time += end - start
+        self.chkp[1][1] += chkp1 - start
+        self.chkp[1][2] += chkp2 - chkp1
+        self.chkp[1][3] += chkp3 - chkp2
+        self.chkp[1][4] += chkp4 - chkp3
+        self.chkp[1][5] += chkp5 - chkp4
+        self.chkp[1][6] += chkp6 - chkp5
+        self.chkp[1][7] += end - chkp6
+        self.lir_calls += 1
+        if self.lir_calls % self.tasks_per_chkp == 0:
+            self.lir_file.write(f"{self.lir_batch},{sum(self.chkp[1]) / self.tasks_per_chkp},{','.join([str(n / self.tasks_per_chkp) for n in self.chkp[1][1:]])}\n")
+            self.lir_time = 0
+            self.chkp[1] = [0] * 8
+            self.lir_batch += 1
 
     def launch_task(self, task_record: TaskRecord) -> Future:
         """Handle the actual submission of the task to the executor layer.
@@ -1016,30 +1043,30 @@ class DataFlowKernel(object):
         end = time.process_time_ns()
 
         # time stats
-        self.chkp[1] += chk1 - start 
-        self.chkp[2] += chk2 - chk1
-        self.chkp[3] += chk3 - chk2
-        self.chkp[4] += chk4 - chk3
-        self.chkp[5] += chk5 - chk4
-        self.chkp[6] += chk6 - chk5
-        self.chkp[7] += chk7 - chk6
-        self.chkp[8] += chk8 - chk7
-        self.chkp[9] += chk9 - chk8
-        self.chkp[10] += chk10 - chk9
-        self.chkp[11] += chk11 - chk10
-        self.chkp[12] += chk12 - chk11
-        self.chkp[13] += chk13 - chk12
-        self.chkp[14] += chk14 - chk13
-        self.chkp[15] += chk15 - chk14
-        self.chkp[16] += chk16 - chk15
-        self.chkp[17] += chk17 - chk16
-        self.chkp[18] += chk18 - chk17
-        self.chkp[19] += end - chk18
+        self.chkp[0][1] += chk1 - start 
+        self.chkp[0][2] += chk2 - chk1
+        self.chkp[0][3] += chk3 - chk2
+        self.chkp[0][4] += chk4 - chk3
+        self.chkp[0][5] += chk5 - chk4
+        self.chkp[0][6] += chk6 - chk5
+        self.chkp[0][7] += chk7 - chk6
+        self.chkp[0][8] += chk8 - chk7
+        self.chkp[0][9] += chk9 - chk8
+        self.chkp[0][10] += chk10 - chk9
+        self.chkp[0][11] += chk11 - chk10
+        self.chkp[0][12] += chk12 - chk11
+        self.chkp[0][13] += chk13 - chk12
+        self.chkp[0][14] += chk14 - chk13
+        self.chkp[0][15] += chk15 - chk14
+        self.chkp[0][16] += chk16 - chk15
+        self.chkp[0][17] += chk17 - chk16
+        self.chkp[0][18] += chk18 - chk17
+        self.chkp[0][19] += end - chk18
         self.submit_time += 1
-        if self.submit_calls % 1000 == 0:
-            self.submit_file.write(f"{self.batch},{sum(self.chkp) / 1000},{','.join([str(n / 1000) for n in self.chkp[1:]])}\n")
+        if self.submit_calls % self.tasks_per_chkp == 0:
+            self.submit_file.write(f"{self.batch},{sum(self.chkp[0]) / self.tasks_per_chkp},{','.join([str(n / self.tasks_per_chkp) for n in self.chkp[0][1:]])}\n")
             self.submit_time = 0
-            self.chkp = [0] * 20
+            self.chkp[0] = [0] * 20
             self.batch += 1
         return app_fu
 
@@ -1224,6 +1251,7 @@ class DataFlowKernel(object):
         logger.info(f"Average task submit time: {self.submit_time / self.submit_calls} submit calls: {self.submit_calls}\n")
         logger.info(f"Average task launch if ready time: {self.lir_time / self.lir_calls}; lir calls: {self.lir_calls}\n")
         self.submit_file.close()
+        self.lir_file.close()
         logger.info("DFK cleanup complete")
 
     def checkpoint(self, tasks: Optional[Sequence[TaskRecord]] = None) -> str:
