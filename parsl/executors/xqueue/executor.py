@@ -207,6 +207,7 @@ class XQExecutor(NoStatusHandlingExecutor, RepresentationMixin):
             logger.error("Management thread already exists, returning")
 
     def submit(self, func, resource_specification, *args, **kwargs):
+        return Future()
         """Submits work to the outgoing_q.
 
         The outgoing_q is an external process listens on this
