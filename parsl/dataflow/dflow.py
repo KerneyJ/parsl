@@ -190,14 +190,17 @@ class DataFlowKernel(object):
         self.task_count = 0
         self.submit_time = 0.0
         self.lir_time = 0.0
-        self.chkp = [[0] * 20, [0] * 8]
+        self.chkp = [[0] * 20, [0] * 8, [0] * 7]
         self.tasks_per_chkp = 1000
         self.batch = 0
         self.lir_batch = 0
+        self.lau_batch = 0
         self.submit_calls = 0 # calls to submit
         self.lir_calls = 0 # calls to launch if ready
+        self.lau_calls = 0 # calls to launch task
         self.submit_file = open(f"{self.run_dir}/submit.csv", "w")
         self.lir_file = open(f"{self.run_dir}/lir.csv", "w")
+        self.lau_file = open(f"{self.run_dir}/lau.csv", "w")
         self.tasks: Dict[int, TaskRecord] = {}
         self.submitter_lock = threading.Lock()
 
@@ -630,6 +633,8 @@ class DataFlowKernel(object):
         Returns:
             Future that tracks the execution of the submitted executable
         """
+        start = time.process_time_ns()
+        # chkp 1
         task_id = task_record['id']
         executable = task_record['func']
         args = task_record['args']
@@ -637,6 +642,8 @@ class DataFlowKernel(object):
 
         task_record['try_time_launched'] = datetime.datetime.now()
 
+        chkp1 = time.process_time_ns()
+        # chkp 2
         memo_fu = self.memoizer.check_memo(task_record)
         if memo_fu:
             logger.info("Reusing cached result for task {}".format(task_id))
@@ -645,6 +652,9 @@ class DataFlowKernel(object):
             return memo_fu
 
         task_record['from_memo'] = False
+
+        chkp2 = time.process_time_ns()
+        # chkp 3
         executor_label = task_record["executor"]
         try:
             executor = self.executors[executor_label]
@@ -652,8 +662,9 @@ class DataFlowKernel(object):
             logger.exception("Task {} requested invalid executor {}: config is\n{}".format(task_id, executor_label, self._config))
             raise ValueError("Task {} requested invalid executor {}".format(task_id, executor_label))
 
+        chkp3 = time.process_time_ns()
+        # chkp 4
         try_id = task_record['fail_count']
-
         if self.monitoring is not None and self.monitoring.resource_monitoring_enabled:
             wrapper_logging_level = logging.DEBUG if self.monitoring.monitoring_debug else logging.INFO
             executable = self.monitoring.monitor_wrapper(executable, try_id, task_id,
@@ -664,19 +675,36 @@ class DataFlowKernel(object):
                                                          executor.radio_mode,
                                                          executor.monitor_resources(),
                                                          self.run_dir)
-
+        chkp4 = time.process_time_ns()
+        # chkp 5
         with self.submitter_lock:
             exec_fu = executor.submit(executable, task_record['resource_specification'], *args, **kwargs)
         self.update_task_state(task_record, States.launched)
 
-        self._send_task_log_info(task_record)
+        chkp5 = time.process_time_ns()
+        # chkp 6
+#        self._send_task_log_info(task_record)
+#
+#        if hasattr(exec_fu, "parsl_executor_task_id"):
+#            logger.info(f"Parsl task {task_id} try {try_id} launched on executor {executor.label} with executor id {exec_fu.parsl_executor_task_id}")
+#        else:
+#            logger.info(f"Parsl task {task_id} try {try_id} launched on executor {executor.label}")
+#
+#        self._log_std_streams(task_record)
+        end = time.process_time_ns()
+        self.lau_calls += 1
 
-        if hasattr(exec_fu, "parsl_executor_task_id"):
-            logger.info(f"Parsl task {task_id} try {try_id} launched on executor {executor.label} with executor id {exec_fu.parsl_executor_task_id}")
-        else:
-            logger.info(f"Parsl task {task_id} try {try_id} launched on executor {executor.label}")
-
-        self._log_std_streams(task_record)
+        self.chkp[2][1] += chkp1 - start
+        self.chkp[2][2] += chkp2 - chkp1
+        self.chkp[2][3] += chkp3 - chkp2
+        self.chkp[2][4] += chkp4 - chkp3
+        self.chkp[2][5] += chkp5 - chkp4
+        self.chkp[2][6] += end - chkp5
+        if self.lau_calls % self.tasks_per_chkp == 0:
+            self.lau_file.write(f"{self.lau_batch},{sum(self.chkp[2]) / self.tasks_per_chkp},{','.join([str(n / self.tasks_per_chkp) for n in self.chkp[2][1:]])}\n") 
+            self.chkp[2] = [0] * 7
+            self.lau_time = 0
+            self.lau_batch += 1
 
         return exec_fu
 
@@ -1252,6 +1280,7 @@ class DataFlowKernel(object):
         logger.info(f"Average task launch if ready time: {self.lir_time / self.lir_calls}; lir calls: {self.lir_calls}\n")
         self.submit_file.close()
         self.lir_file.close()
+        self.lau_file.close()
         logger.info("DFK cleanup complete")
 
     def checkpoint(self, tasks: Optional[Sequence[TaskRecord]] = None) -> str:
