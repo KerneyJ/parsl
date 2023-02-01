@@ -1,5 +1,6 @@
 from concurrent.futures import Future
 import os
+import sys
 import typeguard
 import logging
 import threading
@@ -74,7 +75,11 @@ class XQExecutor(NoStatusHandlingExecutor, RepresentationMixin):
 
         # start workers
         worker_logdir = f"{self.run_dir}/{self.label}"
-        os.makedirs(worker_logdir)
+        try:
+            os.makedirs(worker_logdir)
+        except FileExistsError:
+            pass
+
         for i in range(self.max_workers):
             tq = mpQueue()
             w = ForkProcess(target=worker, args=(i, worker_logdir, tq, self.incoming_q))
@@ -207,7 +212,6 @@ class XQExecutor(NoStatusHandlingExecutor, RepresentationMixin):
             logger.error("Management thread already exists, returning")
 
     def submit(self, func, resource_specification, *args, **kwargs):
-        return Future()
         """Submits work to the outgoing_q.
 
         The outgoing_q is an external process listens on this
