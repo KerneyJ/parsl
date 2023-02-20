@@ -20,7 +20,6 @@ from parsl.executors.errors import (
     UnsupportedFeatureError
 )
 
-from parsl.utils import RepresentationMixin
 from parsl.executors.status_handling import NoStatusHandlingExecutor
 from parsl.providers.provider_base import ExecutionProvider
 from parsl.process_loggers import wrap_with_logs
