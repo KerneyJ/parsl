@@ -6,7 +6,7 @@ import logging
 import typeguard
 from abc import ABCMeta, abstractmethod
 from inspect import signature
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Any
 from typing_extensions import Literal
 
 from parsl.dataflow.dflow import DataFlowKernel
@@ -70,7 +70,7 @@ class AppBase(metaclass=ABCMeta):
 
 @typeguard.typechecked
 def python_app(function=None,
-               data_flow_kernel: Optional[DataFlowKernel] = None,
+               data_flow_kernel: Optional[Any] = None,
                cache: bool = False,
                executors: Union[List[str], Literal['all']] = 'all',
                ignore_for_cache: Optional[List[str]] = None,
@@ -114,7 +114,7 @@ def python_app(function=None,
 
 @typeguard.typechecked
 def join_app(function=None,
-             data_flow_kernel: Optional[DataFlowKernel] = None,
+             data_flow_kernel: Optional[Any] = None,
              cache: bool = False,
              ignore_for_cache: Optional[List[str]] = None):
     return python_app(function=function,
@@ -127,7 +127,7 @@ def join_app(function=None,
 
 @typeguard.typechecked
 def bash_app(function=None,
-             data_flow_kernel: Optional[DataFlowKernel] = None,
+             data_flow_kernel: Optional[Any] = None,
              cache: bool = False,
              executors: Union[List[str], Literal['all']] = 'all',
              ignore_for_cache: Optional[List[str]] = None):
