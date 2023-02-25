@@ -1,4 +1,4 @@
-from setuptools import setup, find_packages
+from setuptools import setup, find_packages, Extension
 
 with open('parsl/version.py') as f:
     exec(f.read())
@@ -52,6 +52,7 @@ setup(
                'parsl/executors/workqueue/exec_parsl_function.py',
     ],
 
+    ext_modules=[Extension("cdflow", ["parsl/dataflow/dflow.c"])],
     extras_require=extras_require,
     classifiers=[
         # Maturity

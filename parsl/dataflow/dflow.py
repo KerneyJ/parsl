@@ -2,6 +2,7 @@ from __future__ import annotations
 import atexit
 import logging
 import os
+import cdflow
 import pathlib
 import pickle
 import random
@@ -77,6 +78,7 @@ class DataFlowKernel(object):
         """
 
         # this will be used to check cleanup only happens once
+        cdflow.init_dfk(10000) # Allocate an initial task table size of 10,000
         self.cleanup_called = False
 
         self._config = config
@@ -837,139 +839,7 @@ class DataFlowKernel(object):
                (AppFuture) [DataFutures,]
 
         """
-
-        if ignore_for_cache is None:
-            ignore_for_cache = []
-
-        if self.cleanup_called:
-            raise RuntimeError("Cannot submit to a DFK that has been cleaned up")
-
-        task_id = self.task_count
-        self.task_count += 1
-        if isinstance(executors, str) and executors.lower() == 'all':
-            choices = list(e for e in self.executors if e != '_parsl_internal')
-        elif isinstance(executors, list):
-            choices = executors
-        else:
-            raise ValueError("Task {} supplied invalid type for executors: {}".format(task_id, type(executors)))
-        executor = random.choice(choices)
-        logger.debug("Task {} will be sent to executor {}".format(task_id, executor))
-
-        # The below uses func.__name__ before it has been wrapped by any staging code.
-
-        label = app_kwargs.get('label')
-        for kw in ['stdout', 'stderr']:
-            if kw in app_kwargs:
-                if app_kwargs[kw] == parsl.AUTO_LOGNAME:
-                    if kw not in ignore_for_cache:
-                        ignore_for_cache += [kw]
-                    app_kwargs[kw] = os.path.join(
-                                self.run_dir,
-                                'task_logs',
-                                str(int(task_id / 10000)).zfill(4),  # limit logs to 10k entries per directory
-                                'task_{}_{}{}.{}'.format(
-                                    str(task_id).zfill(4),
-                                    func.__name__,
-                                    '' if label is None else '_{}'.format(label),
-                                    kw)
-                    )
-
-        resource_specification = app_kwargs.get('parsl_resource_specification', {})
-
-        task_def: TaskRecord
-        task_def = {'depends': None,
-                    'executor': executor,
-                    'func_name': func.__name__,
-                    'memoize': cache,
-                    'hashsum': None,
-                    'exec_fu': None,
-                    'fail_count': 0,
-                    'fail_cost': 0,
-                    'fail_history': [],
-                    'from_memo': None,
-                    'ignore_for_cache': ignore_for_cache,
-                    'join': join,
-                    'joins': None,
-                    'try_id': 0,
-                    'id': task_id,
-                    'time_invoked': datetime.datetime.now(),
-                    'time_returned': None,
-                    'try_time_launched': None,
-                    'try_time_returned': None,
-                    'resource_specification': resource_specification}
-
-        self.update_task_state(task_def, States.unsched)
-
-        app_fu = AppFuture(task_def)
-
-        # Transform remote input files to data futures
-        app_args, app_kwargs, func = self._add_input_deps(executor, app_args, app_kwargs, func)
-
-        func = self._add_output_deps(executor, app_args, app_kwargs, app_fu, func)
-
-        task_def.update({
-                    'args': app_args,
-                    'func': func,
-                    'kwargs': app_kwargs,
-                    'app_fu': app_fu})
-
-        assert task_id not in self.tasks
-
-        self.tasks[task_id] = task_def
-
-        # Get the list of dependencies for the task
-        depends = self._gather_all_deps(app_args, app_kwargs)
-        task_def['depends'] = depends
-
-        depend_descs = []
-        for d in depends:
-            if isinstance(d, AppFuture) or isinstance(d, DataFuture):
-                depend_descs.append("task {}".format(d.tid))
-            else:
-                depend_descs.append(repr(d))
-
-        if depend_descs != []:
-            waiting_message = "waiting on {}".format(", ".join(depend_descs))
-        else:
-            waiting_message = "not waiting on any dependency"
-
-        logger.info("Task {} submitted for App {}, {}".format(task_id,
-                                                              task_def['func_name'],
-                                                              waiting_message))
-
-        task_def['task_launch_lock'] = threading.Lock()
-
-        app_fu.add_done_callback(partial(self.handle_app_update, task_def))
-        self.update_task_state(task_def, States.pending)
-        logger.debug("Task {} set to pending state with AppFuture: {}".format(task_id, task_def['app_fu']))
-
-        self._send_task_log_info(task_def)
-
-        # at this point add callbacks to all dependencies to do a launch_if_ready
-        # call whenever a dependency completes.
-
-        # we need to be careful about the order of setting the state to pending,
-        # adding the callbacks, and caling launch_if_ready explicitly once always below.
-
-        # I think as long as we call launch_if_ready once after setting pending, then
-        # we can add the callback dependencies at any point: if the callbacks all fire
-        # before then, they won't cause a launch, but the one below will. if they fire
-        # after we set it pending, then the last one will cause a launch, and the
-        # explicit one won't.
-
-        for d in depends:
-
-            def callback_adapter(dep_fut: Future) -> None:
-                self.launch_if_ready(task_def)
-
-            try:
-                d.add_done_callback(callback_adapter)
-            except Exception as e:
-                logger.error("add_done_callback got an exception {} which will be ignored".format(e))
-
-        self.launch_if_ready(task_def)
-
-        return app_fu
+        return cdflow.submit(func.__name__, time.time(), join, object(), func)
 
     # it might also be interesting to assert that all DFK
     # tasks are in a "final" state (3,4,5) when the DFK
@@ -1029,6 +899,7 @@ class DataFlowKernel(object):
                         self._create_remote_dirs_over_channel(executor.provider, executor.provider.channel)
 
             self.executors[executor.label] = executor
+            cdflow.add_executor_dfk(executor, executor.label)
             block_ids = executor.start()
             if self.monitoring and block_ids:
                 new_status = {}
@@ -1140,7 +1011,8 @@ class DataFlowKernel(object):
             logger.info("Terminating monitoring")
             self.monitoring.close()
             logger.info("Terminated monitoring")
-
+        # cdflow.shutdown_executor_dfk()
+        cdflow.dest_dfk()
         logger.info("DFK cleanup complete")
 
     def checkpoint(self, tasks: Optional[Sequence[TaskRecord]] = None) -> str:
