@@ -839,7 +839,8 @@ class DataFlowKernel(object):
                (AppFuture) [DataFutures,]
 
         """
-        return cdflow.submit(func.__name__, time.time(), join, object(), func, app_args, app_kwargs)
+        logger.info(f"Args: {app_args}, Kwargs: {app_kwargs}")
+        return cdflow.submit(func.__name__, time.time(), join, object(), func, app_args if app_args else None, app_kwargs if app_kwargs else None)
 
     # it might also be interesting to assert that all DFK
     # tasks are in a "final" state (3,4,5) when the DFK
