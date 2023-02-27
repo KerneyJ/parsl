@@ -264,19 +264,21 @@ static PyObject* submit(PyObject* self, PyObject* args){
         return PyErr_Format(PyExc_RuntimeError, "CDFK failed to append new task to task table");
 
     // invoke executor submit function
-    if(fargs != NULL){
-        if(fkwargs != NULL)
-            exec_fu = PyObject_CallMethodObjArgs(exec.obj, pystr_submit, func, Py_None, fargs, fkwargs);
+    exec_fu = PyObject_CallMethodObjArgs(exec.obj, pystr_submit, func, Py_None, fargs, fkwargs, NULL);
+/*
+    if(fargs != Py_None){
+        if(fkwargs != Py_None)
+            exec_fu = PyObject_CallMethodObjArgs(exec.obj, pystr_submit, func, Py_None, fargs, fkwargs, NULL);
         else
             exec_fu = PyObject_CallMethodObjArgs(exec.obj, pystr_submit, func, Py_None, fargs, NULL);
     }
     else{
-        if(fkwargs != NULL)
+        if(fkwargs != Py_None)
             exec_fu = PyObject_CallMethodObjArgs(exec.obj, pystr_submit, func, Py_None, Py_None, fkwargs, NULL);
         else
             exec_fu = PyObject_CallMethodObjArgs(exec.obj, pystr_submit, func, Py_None, NULL);
     }
-
+*/
     if(exec_fu == NULL)
         return PyErr_Format(PyExc_RuntimeError, "CDFK exec_fu PyObject* returned by invocation of %s.submit is NULL", exec.label);
 
