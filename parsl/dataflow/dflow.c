@@ -246,9 +246,9 @@ static PyObject* submit(PyObject* self, PyObject* args){
     int join;
     double time_invoked;
     struct executor exec;
-    PyObject* future = NULL,* func = NULL,* fargs=NULL,* fkwargs=NULL,* exec_fu=NULL;
+    PyObject* execsubmit_wrapper = NULL,* func = NULL,* fargs=NULL,* fkwargs=NULL,* exec_fu=NULL;
 
-    if(!PyArg_ParseTuple(args, "sdpOO|OO", &func_name, &time_invoked, &join, &future, &func, &fargs, &fkwargs))
+    if(!PyArg_ParseTuple(args, "sdpOO|OO", &func_name, &time_invoked, &join, &execsubmit_wrapper, &func, &fargs, &fkwargs))
         return NULL;
 
     if(join){
@@ -260,11 +260,11 @@ static PyObject* submit(PyObject* self, PyObject* args){
         exec = executors[(rand() % executorcount-1) + 1];
     }
 
-    if(appendtask(exec.label, func_name, time_invoked, join, future, exec.obj, func, fargs, fkwargs) < 0)
+    if(appendtask(exec.label, func_name, time_invoked, join, Py_None, exec.obj, func, fargs, fkwargs) < 0)
         return PyErr_Format(PyExc_RuntimeError, "CDFK failed to append new task to task table");
 
     // invoke executor submit function
-    exec_fu = PyObject_CallMethodObjArgs(exec.obj, pystr_submit, func, Py_None, fargs, fkwargs, NULL);
+    exec_fu = PyObject_CallFunctionObjArgs(execsubmit_wrapper, exec.obj, func, fargs, fkwargs, NULL);// PyObject_CallMethodObjArgs(exec.obj, pystr_submit, func, Py_None, fargs, fkwargs, NULL);
 /*
     if(fargs != Py_None){
         if(fkwargs != Py_None)
@@ -280,7 +280,7 @@ static PyObject* submit(PyObject* self, PyObject* args){
     }
 */
     if(exec_fu == NULL)
-        return PyErr_Format(PyExc_RuntimeError, "CDFK exec_fu PyObject* returned by invocation of %s.submit is NULL", exec.label);
+        return NULL; // return PyErr_Format(PyExc_RuntimeError, "CDFK exec_fu PyObject* returned by invocation of %s.submit is NULL", exec.label);
 
     return exec_fu;
 }

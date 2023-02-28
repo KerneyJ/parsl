@@ -816,6 +816,10 @@ class DataFlowKernel(object):
 
         return new_args, kwargs, dep_failures
 
+    @staticmethod
+    def execsubmit_wrapper(executor, func, args, kwargs):
+        return executor.submit(func, None, *args, **kwargs)
+
     def submit(self, func, app_args, executors='all', cache=False, ignore_for_cache=None, app_kwargs={}, join=False):
         """Add task to the dataflow system.
 
@@ -840,7 +844,7 @@ class DataFlowKernel(object):
 
         """
         logger.info(f"Args: {app_args}, Kwargs: {app_kwargs}")
-        return cdflow.submit(func.__name__, time.time(), join, object(), func, app_args if app_args else None, app_kwargs if app_kwargs else None)
+        return cdflow.submit(func.__name__, time.time(), join, self.execsubmit_wrapper, func, app_args, app_kwargs)
 
     # it might also be interesting to assert that all DFK
     # tasks are in a "final" state (3,4,5) when the DFK
