@@ -62,7 +62,10 @@ struct executor{
 static int init_tasktable(unsigned long); // allocate initial amont of memory for table
 static int resize_tasktable(unsigned long); // change amount of memory in table
 static int increment_tasktable(void); // will try to increase table size by TABLE_INC
-static int appendtask(char*, char*, double, int, PyObject*, PyObject*, PyObject*, PyObject*, PyObject*); // add a task to the dfk
+
+static int create_task(char*, char*, double, int, PyObject*, PyObject*, PyObject*, PyObject*, PyObject*); // add a task to the dfk
+static int adddep_task(unsigned long, unsigned long);
+static int chstatus_task(unsigned long, enum state);
 
 static PyObject* init_dfk(PyObject*, PyObject*);
 static PyObject* dest_dfk(PyObject*);
@@ -130,7 +133,7 @@ static int increment_tasktable(){
  * just add new task in the next unused spot
  * Returns the id of the task it created
  */
-static int appendtask(char* exec_label, char* func_name, double time_invoked, int join, PyObject* future, PyObject* executor, PyObject* func, PyObject* args, PyObject* kwargs){
+static int create_task(char* exec_label, char* func_name, double time_invoked, int join, PyObject* future, PyObject* executor, PyObject* func, PyObject* args, PyObject* kwargs){
     // check if the table is large enough
     if(taskcount == tablesize)
         if(increment_tasktable() < 0)
@@ -266,7 +269,7 @@ static PyObject* submit(PyObject* self, PyObject* args){
         exec = executors[(rand() % executorcount-1) + 1];
     }
 
-    if((task_id = appendtask(exec.label, func_name, time_invoked, join, Py_None, exec.obj, func, fargs, fkwargs)) < 0)
+    if((task_id = create_task(exec.label, func_name, time_invoked, join, Py_None, exec.obj, func, fargs, fkwargs)) < 0)
         return PyErr_Format(PyExc_RuntimeError, "CDFK failed to append new task to task table");
 
     // check for dependencies in args and kwargs
