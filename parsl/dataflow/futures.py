@@ -118,3 +118,19 @@ class AppFuture(Future):
     @property
     def outputs(self) -> Sequence[DataFuture]:
         return self._outputs
+
+class ExecFutureWrapper(object):
+
+    def __init__(self, exec_fu, tid):
+        self._tid = tid
+        self._exec_fu = exec_fu
+
+    @property
+    def tid(self):
+        return self._tid
+
+    def done(self):
+        return self._exec_fu.done()
+
+    def result(self):
+        return self._exec_fu.result()

@@ -90,6 +90,8 @@ unsigned long taskcount; // number of tasks created
 
 PyObject* pystr_submit = NULL;
 PyObject* pystr_shutdown = NULL;
+PyObject* pystr_tid = NULL;
+PyObject* pytyp_execfut = NULL;
 
 static int init_tasktable(unsigned long numtasks){
     tasktable = (struct task*)PyMem_RawMalloc(sizeof(struct task) * numtasks);
@@ -126,6 +128,7 @@ static int increment_tasktable(){
  * goal if to implement something super simple and
  * functional so task will not be deleted we will
  * just add new task in the next unused spot
+ * Returns the id of the task it created
  */
 static int appendtask(char* exec_label, char* func_name, double time_invoked, int join, PyObject* future, PyObject* executor, PyObject* func, PyObject* args, PyObject* kwargs){
     // check if the table is large enough
@@ -151,12 +154,12 @@ static int appendtask(char* exec_label, char* func_name, double time_invoked, in
     task->args = args;
     task->kwargs = kwargs;
 
-    return 0;
+    return task->id;
 }
 
 static PyObject* init_dfk(PyObject* self, PyObject* args){
     unsigned long numtasks;
-    if(!PyArg_ParseTuple(args, "k", &numtasks))
+    if(!PyArg_ParseTuple(args, "kO", &numtasks, &pytyp_execfut))
         return NULL;
 
     if(init_tasktable(numtasks) < 0)
@@ -164,6 +167,7 @@ static PyObject* init_dfk(PyObject* self, PyObject* args){
 
     pystr_submit = Py_BuildValue("s", "submit");
     pystr_shutdown = Py_BuildValue("s", "shutdown");
+    pystr_tid = Py_BuildValue("s", "tid");
     return Py_None;
 }
 
@@ -182,6 +186,7 @@ static PyObject* dest_dfk(PyObject* self){
 
     Py_XDECREF(pystr_submit);
     Py_XDECREF(pystr_shutdown);
+    Py_XDECREF(pystr_tid);
 
     return Py_None;
 }
@@ -243,12 +248,13 @@ static PyObject* info_task(PyObject* self, PyObject* args){
  */
 static PyObject* submit(PyObject* self, PyObject* args){
     char* func_name;
-    int join;
+    int join, i, arglist_len;
+    unsigned long task_id;
     double time_invoked;
     struct executor exec;
-    PyObject* execsubmit_wrapper = NULL,* func = NULL,* fargs=NULL,* fkwargs=NULL,* exec_fu=NULL;
+    PyObject* execsubmit_wrapper = NULL,* func = NULL,* fargs=NULL,* fkwargs=NULL,* exec_fu=NULL,* arglist = NULL;
 
-    if(!PyArg_ParseTuple(args, "sdpOO|OO", &func_name, &time_invoked, &join, &execsubmit_wrapper, &func, &fargs, &fkwargs))
+    if(!PyArg_ParseTuple(args, "sdpOO|OOO", &func_name, &time_invoked, &join, &execsubmit_wrapper, &func, &fargs, &fkwargs, &arglist))
         return NULL;
 
     if(join){
@@ -260,29 +266,28 @@ static PyObject* submit(PyObject* self, PyObject* args){
         exec = executors[(rand() % executorcount-1) + 1];
     }
 
-    if(appendtask(exec.label, func_name, time_invoked, join, Py_None, exec.obj, func, fargs, fkwargs) < 0)
+    if((task_id = appendtask(exec.label, func_name, time_invoked, join, Py_None, exec.obj, func, fargs, fkwargs)) < 0)
         return PyErr_Format(PyExc_RuntimeError, "CDFK failed to append new task to task table");
 
-    // invoke executor submit function
-    exec_fu = PyObject_CallFunctionObjArgs(execsubmit_wrapper, exec.obj, func, fargs, fkwargs, NULL);// PyObject_CallMethodObjArgs(exec.obj, pystr_submit, func, Py_None, fargs, fkwargs, NULL);
-/*
-    if(fargs != Py_None){
-        if(fkwargs != Py_None)
-            exec_fu = PyObject_CallMethodObjArgs(exec.obj, pystr_submit, func, Py_None, fargs, fkwargs, NULL);
-        else
-            exec_fu = PyObject_CallMethodObjArgs(exec.obj, pystr_submit, func, Py_None, fargs, NULL);
+    // check for dependencies in args and kwargs
+    arglist_len = PyList_Size(arglist);
+    for(i = 0; i < arglist_len; i++){
+        PyObject* item = PyList_GetItem(arglist, i);
+        if(PyObject_IsInstance(item, pytyp_execfut)){
+            // We have found a dependency
+            PyObject* pylong_tid = PyObject_GetAttr(item, pystr_tid);
+            unsigned long dep_id = (unsigned long)PyLong_AsLong(pylong_tid);
+            PyObject_Print(pylong_tid, stdout, 0);
+        }
     }
-    else{
-        if(fkwargs != Py_None)
-            exec_fu = PyObject_CallMethodObjArgs(exec.obj, pystr_submit, func, Py_None, Py_None, fkwargs, NULL);
-        else
-            exec_fu = PyObject_CallMethodObjArgs(exec.obj, pystr_submit, func, Py_None, NULL);
-    }
-*/
-    if(exec_fu == NULL)
-        return NULL; // return PyErr_Format(PyExc_RuntimeError, "CDFK exec_fu PyObject* returned by invocation of %s.submit is NULL", exec.label);
 
-    return exec_fu;
+    // invoke executor submit function
+    exec_fu = PyObject_CallFunctionObjArgs(execsubmit_wrapper, exec.obj, func, fargs, fkwargs, NULL);
+    if(exec_fu == NULL)
+        return NULL;
+
+
+    return Py_BuildValue("Oi", exec_fu, task_id);
 }
 
 char init_dfk_docs[] = "This method will initialize the dfk. In doing so this method will allocate memory for the dag and reset global state.";
