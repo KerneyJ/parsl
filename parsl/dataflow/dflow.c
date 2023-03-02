@@ -7,15 +7,14 @@
  * - TODO have multiple queues, a queue for waitng & pending
  * - TODO maybe split the executor off into another process and
  *   comunicate with it via a zmq pipe
- * - TODO Change all the python bindings to static, this is advised by
- *   the documentation refernced in this stack overflow post
- *   https://stackoverflow.com/questions/18745319/why-function-is-static-in-python
+ * - TODO Maybe add a valid flag that tells whether or not an entry in the task table is valid
  */
 #include <Python.h>
 #include <limits.h>
 #include <stdlib.h>
 
 #define TABLE_INC 10000
+#define DEPTAB_INC 10
 #define EXEC_COUNT 10
 
 /*
@@ -41,6 +40,7 @@ struct task{
     unsigned long id;
     enum state status;
     unsigned long* depends;
+    unsigned long* depsize;
     unsigned long depcount;
     char* exec_label;
     char* func_name;
@@ -64,8 +64,9 @@ static int resize_tasktable(unsigned long); // change amount of memory in table
 static int increment_tasktable(void); // will try to increase table size by TABLE_INC
 
 static int create_task(char*, char*, double, int, PyObject*, PyObject*, PyObject*, PyObject*, PyObject*); // add a task to the dfk
-static int adddep_task(unsigned long, unsigned long);
-static int chstatus_task(unsigned long, enum state);
+static int delete_task(unsigned long); // TODO implement
+static int adddep_task(unsigned long, unsigned long); // TODO implement
+static int chstatus_task(unsigned long, enum state); // TODO implement
 
 static PyObject* init_dfk(PyObject*, PyObject*);
 static PyObject* dest_dfk(PyObject*);
@@ -112,7 +113,7 @@ static int resize_tasktable(unsigned long numtasks){
     if(!tasktable) // check if task table has been initialized
         return -1;
 
-    if((tasktable = (struct task*)PyMem_RawRealloc(tasktable, numtasks * sizeof(struct task*))) == NULL)
+    if((tasktablte = (struct task*)PyMem_RawRealloc(tasktable, numtasks * sizeof(struct task*))) == NULL)
         return -1;
 
     tablesize = numtasks;
@@ -144,6 +145,7 @@ static int create_task(char* exec_label, char* func_name, double time_invoked, i
     taskcount++;
     task->status = unsched;
     task->depends = NULL;
+    task->depsize = 0;
     task->depcount = 0;
 
     task->exec_label = exec_label;
@@ -158,6 +160,21 @@ static int create_task(char* exec_label, char* func_name, double time_invoked, i
     task->kwargs = kwargs;
 
     return task->id;
+}
+
+static int adddep_task(unsigned long task_id, unsigned long dep_id){
+    struct task* task = &tasktable[task_id];
+    if(!task->depends){ // has not malloced for depends matrix
+        task->depends = (unsigned long*)PyMem_RawMalloc(sizeof(unsigned long) * DEPTAB_INC);
+        task->depsize = DEBTAB_INC;
+    }
+    else if(task->depcount >= task->depsize){ // need to resize the dep count array
+        task->depends = (unsigned long*)PyMem_RawRealloc(task->depends, sizeof(unsigned long) * (task->depsize + DEPTAB_INC);
+        task->depsize += DEBTAB_INC;
+    }
+    task->depends[task->depcount] = dep_id;
+    task->depcount++;
+    return 0;
 }
 
 static PyObject* init_dfk(PyObject* self, PyObject* args){
@@ -288,7 +305,6 @@ static PyObject* submit(PyObject* self, PyObject* args){
     exec_fu = PyObject_CallFunctionObjArgs(execsubmit_wrapper, exec.obj, func, fargs, fkwargs, NULL);
     if(exec_fu == NULL)
         return NULL;
-
 
     return Py_BuildValue("Oi", exec_fu, task_id);
 }
