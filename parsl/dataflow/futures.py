@@ -9,6 +9,7 @@ We have two basic types of futures:
 from concurrent.futures import Future
 import logging
 import threading
+import warnings
 from typing import Optional, Sequence
 
 from parsl.app.futures import DataFuture
@@ -130,7 +131,13 @@ class ExecFutureWrapper(object):
         return self._tid
 
     def done(self):
-        return self._exec_fu.done()
+        if self._exec_fu:
+            return self._exec_fu.done()
+        else:
+            return False
 
     def result(self):
-        return self._exec_fu.result()
+        if self._exec_fu:
+            return self._exec_fu.result()
+        else:
+            warnings.warn(f"Task {self._tid} has yet to be submitted so it is not associated with a future", RuntimeWarning)

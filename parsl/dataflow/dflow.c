@@ -50,6 +50,7 @@ struct task{
     int valid;
 
     PyObject* future;
+    PyObject* futwrap;
     PyObject* executor;
     PyObject* func;
     PyObject* args;
@@ -99,6 +100,7 @@ unsigned long taskcount; // number of tasks created
 PyObject* pystr_submit = NULL;
 PyObject* pystr_shutdown = NULL;
 PyObject* pystr_tid = NULL;
+PyObject* pystr_done = NULL;
 PyObject* pytyp_execfut = NULL;
 
 static int init_tasktable(unsigned long numtasks){
@@ -222,6 +224,7 @@ static PyObject* init_dfk(PyObject* self, PyObject* args){
     pystr_submit = Py_BuildValue("s", "submit");
     pystr_shutdown = Py_BuildValue("s", "shutdown");
     pystr_tid = Py_BuildValue("s", "tid");
+    pystr_done = Py_BuildValue("s", "done");
     return Py_None;
 }
 
@@ -244,6 +247,7 @@ static PyObject* dest_dfk(PyObject* self){
     Py_XDECREF(pystr_submit);
     Py_XDECREF(pystr_shutdown);
     Py_XDECREF(pystr_tid);
+    Py_XDECREF(pystr_done);
 
     return Py_None;
 }
@@ -306,7 +310,7 @@ static PyObject* info_task(PyObject* self, PyObject* args){
 static PyObject* submit(PyObject* self, PyObject* args){
     char* func_name;
     int join, i, arglist_len;
-    unsigned long task_id;
+    unsigned long task_id, dep_id;
     double time_invoked;
     struct executor exec;
     PyObject* execsubmit_wrapper = NULL,* func = NULL,* fargs=NULL,* fkwargs=NULL,* exec_fu=NULL,* arglist = NULL;
@@ -324,27 +328,47 @@ static PyObject* submit(PyObject* self, PyObject* args){
     }
 
     if((task_id = create_task(exec.label, func_name, time_invoked, join, Py_None, exec.obj, func, fargs, fkwargs)) < 0)
-        return PyErr_Format(PyExc_RuntimeError, "CDFK failed to append new task to task table");
+        return PyErr_Format(PyExc_RuntimeError, "CDFK failed to create new task and append it to task table");
+    struct task* task = get_task(task_id);
 
     // check for dependencies in args and kwargs
     arglist_len = PyList_Size(arglist);
     for(i = 0; i < arglist_len; i++){
         PyObject* item = PyList_GetItem(arglist, i);
-        if(PyObject_IsInstance(item, pytyp_execfut)){
-            // We have found a dependency
-            PyObject* pylong_tid = PyObject_GetAttr(item, pystr_tid);
-            unsigned long dep_id = (unsigned long)PyLong_AsLong(pylong_tid);
-            adddep_task(task_id, dep_id);
-            chstatus_task(task_id, pending);
+        if(!PyObject_IsInstance(item, pytyp_execfut))
+            continue;
+        if(PyObject_IsTrue(PyObject_CallMethodNoArgs(item, pystr_done))){
+            // got a dependency that happens to be already done
+            // TODO Figure out someway to replace the value in fargs or fkwargs with the result
+            // Maybe arglist should be a list of tuples where the first element in the tuple is
+            // the position of the arg in fargs or the key in fkwargs and the second element is
+            // the item itself
         }
+        else{
+            PyObject* pylong_tid = PyObject_GetAttr(item, pystr_tid);
+            dep_id = (unsigned long)PyLong_AsLong(pylong_tid);
+            adddep_task(task_id, dep_id);
+        }
+        chstatus_task(task_id, pending);
     }
 
-    // invoke executor submit function
-    exec_fu = PyObject_CallFunctionObjArgs(execsubmit_wrapper, exec.obj, func, fargs, fkwargs, NULL);
-    if(exec_fu == NULL)
-        return NULL;
+    if(getstatus_task(task_id) == pending){
+        PyObject* futwrap_arglist = Py_BuildValue("Oi", Py_None, task_id);
+        PyObject* futwrap = PyObject_CallObject(pytyp_execfut, futwrap_arglist);
+        Py_DECREF(futwrap_arglist);
+        return futwrap;
+    }
+    else{
+        // invoke executor submit function
+        exec_fu = PyObject_CallFunctionObjArgs(execsubmit_wrapper, exec.obj, func, fargs, fkwargs, NULL);
+        if(exec_fu == NULL)
+            return NULL;
 
-    return Py_BuildValue("Oi", exec_fu, task_id);
+        PyObject* futwrap_arglist = Py_BuildValue("Oi", exec_fu, task_id);
+        PyObject* futwrap = PyObject_CallObject(pytyp_execfut, futwrap_arglist);
+        Py_DECREF(futwrap_arglist);
+        return futwrap;
+    }
 }
 
 char init_dfk_docs[] = "This method will initialize the dfk. In doing so this method will allocate memory for the dag and reset global state.";
