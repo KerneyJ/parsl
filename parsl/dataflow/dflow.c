@@ -8,6 +8,7 @@
  * - TODO maybe split the executor off into another process and
  *   comunicate with it via a zmq pipe
  * - TODO Maybe add a valid flag that tells whether or not an entry in the task table is valid
+ * - TODO Currently task_id = index in table, might want to change this for the sake of space
  */
 #include <Python.h>
 #include <limits.h>
@@ -66,8 +67,10 @@ static int increment_tasktable(void); // will try to increase table size by TABL
 
 static int create_task(char*, char*, double, int, PyObject*, PyObject*, PyObject*, PyObject*, PyObject*); // add a task to the dfk
 static int delete_task(unsigned long);
+static inline struct task* get_task(unsigned long);
 static int adddep_task(unsigned long, unsigned long);
-static int chstatus_task(unsigned long, enum state); // TODO implement
+static int chstatus_task(unsigned long, enum state);
+static enum state getstatus_task(unsigned long);
 
 static PyObject* init_dfk(PyObject*, PyObject*);
 static PyObject* dest_dfk(PyObject*);
@@ -144,7 +147,7 @@ static int create_task(char* exec_label, char* func_name, double time_invoked, i
         if(increment_tasktable() < 0)
             return -1;
 
-    struct task* task = &tasktable[taskcount];
+    struct task* task = get_task(taskcount);
     task->id = taskcount;
     taskcount++;
     task->status = unsched;
@@ -168,7 +171,7 @@ static int create_task(char* exec_label, char* func_name, double time_invoked, i
 }
 
 static int delete_task(unsigned long task_id){
-    struct task* task = &tasktable[task_id];
+    struct task* task = get_task(task_id);
     if(!task->valid)
         return -1; // task does not exist or has already been deleted
     if(task->depends){
@@ -178,8 +181,12 @@ static int delete_task(unsigned long task_id){
     return 0;
 }
 
+static inline struct task* get_task(unsigned long task_id){
+    return &tasktable[task_id];
+}
+
 static int adddep_task(unsigned long task_id, unsigned long dep_id){
-    struct task* task = &tasktable[task_id];
+    struct task* task = get_task(task_id);
     if(!task->depends){ // has not malloced for depends matrix
         task->depends = (unsigned long*)PyMem_RawMalloc(sizeof(unsigned long) * DEPTAB_INC);
         task->depsize = DEPTAB_INC;
@@ -194,9 +201,14 @@ static int adddep_task(unsigned long task_id, unsigned long dep_id){
 }
 
 static int chstatus_task(unsigned long task_id, enum state status){
-    struct task* task = &tasktable[task_id];
+    struct task* task = get_task(task_id);
     task->status = status;
     return 0;
+}
+
+static enum state getstatus_task(unsigned long task_id){
+    struct task* task = get_task(task_id);
+    return task->status;
 }
 
 static PyObject* init_dfk(PyObject* self, PyObject* args){
@@ -270,21 +282,21 @@ static PyObject* shutdown_executor_dfk(PyObject* self){
     return Py_None;
 }
 static PyObject* info_task(PyObject* self, PyObject* args){
-    unsigned long id;
+    unsigned long task_id;
 
-    if(!PyArg_ParseTuple(args, "k", &id))
+    if(!PyArg_ParseTuple(args, "k", &task_id))
         return NULL;
 
     if(tasktable == NULL) // TODO throw error here
         return PyUnicode_FromFormat("DFK Uninitialized");
 
-    if(id >= taskcount) // TODO throw error here
+    if(task_id >= taskcount) // TODO throw error here
         return PyUnicode_FromFormat("Task unallocated");
 
-    struct task task = tasktable[id];
+    struct task* task = get_task(task_id);
 
     return PyUnicode_FromFormat("Task %lu -> state: %i; depcount: %lu; exec_label: %s; func_name: %s; time invoked: %i; join: %i", // TODO find how to print float
-                                task.id, task.status, task.depcount, task.exec_label, task.func_name, (int)task.time_invoked, task.join);
+                                task->id, task->status, task->depcount, task->exec_label, task->func_name, (int)task->time_invoked, task->join);
 }
 
 /*
@@ -322,6 +334,8 @@ static PyObject* submit(PyObject* self, PyObject* args){
             // We have found a dependency
             PyObject* pylong_tid = PyObject_GetAttr(item, pystr_tid);
             unsigned long dep_id = (unsigned long)PyLong_AsLong(pylong_tid);
+            adddep_task(task_id, dep_id);
+            chstatus_task(task_id, pending);
         }
     }
 
