@@ -40,12 +40,13 @@ struct task{
     unsigned long id;
     enum state status;
     unsigned long* depends;
-    unsigned long* depsize;
+    unsigned long depsize;
     unsigned long depcount;
-    char* exec_label;
+    char* exec_label; // Initialized by PyArg_Parse, who keeps track of memory
     char* func_name;
     double time_invoked;
     int join;
+    int valid;
 
     PyObject* future;
     PyObject* executor;
@@ -64,8 +65,8 @@ static int resize_tasktable(unsigned long); // change amount of memory in table
 static int increment_tasktable(void); // will try to increase table size by TABLE_INC
 
 static int create_task(char*, char*, double, int, PyObject*, PyObject*, PyObject*, PyObject*, PyObject*); // add a task to the dfk
-static int delete_task(unsigned long); // TODO implement
-static int adddep_task(unsigned long, unsigned long); // TODO implement
+static int delete_task(unsigned long);
+static int adddep_task(unsigned long, unsigned long);
 static int chstatus_task(unsigned long, enum state); // TODO implement
 
 static PyObject* init_dfk(PyObject*, PyObject*);
@@ -103,6 +104,9 @@ static int init_tasktable(unsigned long numtasks){
         return -1;
     tablesize = numtasks;
     taskcount = 0;
+    // set all of the valid flags to 0
+    for(unsigned long i; i < numtasks; i++)
+        tasktable[i].valid = 0;
     return 0;
 }
 
@@ -113,7 +117,7 @@ static int resize_tasktable(unsigned long numtasks){
     if(!tasktable) // check if task table has been initialized
         return -1;
 
-    if((tasktablte = (struct task*)PyMem_RawRealloc(tasktable, numtasks * sizeof(struct task*))) == NULL)
+    if((tasktable = (struct task*)PyMem_RawRealloc(tasktable, numtasks * sizeof(struct task*))) == NULL)
         return -1;
 
     tablesize = numtasks;
@@ -132,7 +136,7 @@ static int increment_tasktable(){
  * goal if to implement something super simple and
  * functional so task will not be deleted we will
  * just add new task in the next unused spot
- * Returns the id of the task it created
+ * Returns the id of the task it created TODO, should be an unsigned long
  */
 static int create_task(char* exec_label, char* func_name, double time_invoked, int join, PyObject* future, PyObject* executor, PyObject* func, PyObject* args, PyObject* kwargs){
     // check if the table is large enough
@@ -158,19 +162,31 @@ static int create_task(char* exec_label, char* func_name, double time_invoked, i
     task->func = func;
     task->args = args;
     task->kwargs = kwargs;
+    task->valid = 1;
 
     return task->id;
+}
+
+static int delete_task(unsigned long task_id){
+    struct task* task = &tasktable[task_id];
+    if(!task->valid)
+        return -1; // task does not exist or has already been deleted
+    if(task->depends){
+        PyMem_RawFree(task->depends);
+    }
+    task->valid = 0;
+    return 0;
 }
 
 static int adddep_task(unsigned long task_id, unsigned long dep_id){
     struct task* task = &tasktable[task_id];
     if(!task->depends){ // has not malloced for depends matrix
         task->depends = (unsigned long*)PyMem_RawMalloc(sizeof(unsigned long) * DEPTAB_INC);
-        task->depsize = DEBTAB_INC;
+        task->depsize = DEPTAB_INC;
     }
     else if(task->depcount >= task->depsize){ // need to resize the dep count array
-        task->depends = (unsigned long*)PyMem_RawRealloc(task->depends, sizeof(unsigned long) * (task->depsize + DEPTAB_INC);
-        task->depsize += DEBTAB_INC;
+        task->depends = (unsigned long*)PyMem_RawRealloc(task->depends, sizeof(unsigned long) * (task->depsize + DEPTAB_INC));
+        task->depsize += DEPTAB_INC;
     }
     task->depends[task->depcount] = dep_id;
     task->depcount++;
@@ -198,9 +214,12 @@ static PyObject* init_dfk(PyObject* self, PyObject* args){
  * issue then we should make sure that this is the case
  */
 static PyObject* dest_dfk(PyObject* self){
-    if(tasktable != NULL)
+    if(tasktable != NULL){
+        for(unsigned long index = 0; index < tablesize; index++){
+            delete_task(index);
+        }
         PyMem_RawFree(tasktable);
-
+    }
     tablesize = 0;
     taskcount = 0;
 
