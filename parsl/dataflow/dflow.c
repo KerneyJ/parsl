@@ -193,6 +193,12 @@ static int adddep_task(unsigned long task_id, unsigned long dep_id){
     return 0;
 }
 
+static int chstatus_task(unsigned long task_id, enum state status){
+    struct task* task = &tasktable[task_id];
+    task->status = status;
+    return 0;
+}
+
 static PyObject* init_dfk(PyObject* self, PyObject* args){
     unsigned long numtasks;
     if(!PyArg_ParseTuple(args, "kO", &numtasks, &pytyp_execfut))
@@ -316,7 +322,6 @@ static PyObject* submit(PyObject* self, PyObject* args){
             // We have found a dependency
             PyObject* pylong_tid = PyObject_GetAttr(item, pystr_tid);
             unsigned long dep_id = (unsigned long)PyLong_AsLong(pylong_tid);
-            PyObject_Print(pylong_tid, stdout, 0);
         }
     }
 
