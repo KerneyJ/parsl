@@ -28,7 +28,7 @@ from parsl.data_provider.data_manager import DataManager
 from parsl.data_provider.files import File
 from parsl.dataflow.error import BadCheckpoint, ConfigurationError, DependencyError
 from parsl.dataflow.flow_control import FlowControl, Timer
-from parsl.dataflow.futures import AppFuture, ExecFutureWrapper
+from parsl.dataflow.futures import AppFuture
 from parsl.dataflow.memoization import Memoizer
 from parsl.dataflow.rundirs import make_rundir
 from parsl.dataflow.states import States, FINAL_STATES, FINAL_FAILURE_STATES
@@ -78,7 +78,7 @@ class DataFlowKernel(object):
         """
 
         # this will be used to check cleanup only happens once
-        cdflow.init_dfk(10000, ExecFutureWrapper) # Allocate an initial task table size of 10,000
+        cdflow.init_dfk(10000, AppFuture) # Allocate an initial task table size of 10,000
         self.cleanup_called = False
 
         self._config = config
