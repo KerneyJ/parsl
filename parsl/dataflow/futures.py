@@ -60,7 +60,7 @@ class AppFuture(Future):
 
     """
 
-    def __init__(self, task_def: TaskRecord) -> None:
+    def __init__(self, exec_fu, tid) -> None:
         """Initialize the AppFuture.
 
         Args:
@@ -70,22 +70,22 @@ class AppFuture(Future):
                    by this future.
         """
         super().__init__()
-        self._update_lock = threading.Lock()
+        self._tid = tid
+        self._exec_fu = exec_fu
         self._outputs: Sequence[DataFuture]
         self._outputs = []
-        self.task_def = task_def
 
     @property
     def stdout(self) -> Optional[str]:
-        return self.task_def['kwargs'].get('stdout')
+        raise NotImplementedError("Stdout not implemented")
 
     @property
     def stderr(self) -> Optional[str]:
-        return self.task_def['kwargs'].get('stderr')
+        raise NotImplementedError("Stderr not implemented")
 
     @property
     def tid(self) -> int:
-        return self.task_def['id']
+        return self._tid
 
     def cancel(self) -> bool:
         raise NotImplementedError("Cancel not implemented")
@@ -94,50 +94,11 @@ class AppFuture(Future):
         return False
 
     def task_status(self) -> str:
-        """Returns the status of the task that will provide the value
-           for this future.  This may not be in-sync with the result state
-           of this future - for example, task_status might return 'done' but
-           self.done() might not be true (which in turn means self.result()
-           and self.exception() might block).
-
-           The actual status description strings returned by this method are
-           likely to change over subsequent versions of parsl, as use-cases
-           and infrastructure are worked out.
-
-           It is expected that the status values will be from a limited set
-           of strings (so that it makes sense, for example, to group and
-           count statuses from many futures).
-
-           It is expected that might be a non-trivial cost in acquiring the
-           status in future (for example, by communicating with a remote
-           worker).
-
-           Returns: str
         """
-        return self.task_def['status'].name
+        Query cdfk for task status
+        """
+        raise NotImplementedError("Task status not implemented")
 
     @property
     def outputs(self) -> Sequence[DataFuture]:
         return self._outputs
-
-class ExecFutureWrapper(object):
-
-    def __init__(self, exec_fu, tid):
-        self._tid = tid
-        self._exec_fu = exec_fu
-
-    @property
-    def tid(self):
-        return self._tid
-
-    def done(self):
-        if self._exec_fu:
-            return self._exec_fu.done()
-        else:
-            return False
-
-    def result(self):
-        if self._exec_fu:
-            return self._exec_fu.result()
-        else:
-            warnings.warn(f"Task {self._tid} has yet to be submitted so it is not associated with a future", RuntimeWarning)
