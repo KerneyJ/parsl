@@ -13,6 +13,8 @@
 #include <Python.h>
 #include <limits.h>
 #include <stdlib.h>
+#include <pthread.h>
+#include <signal.h>
 
 #define TABLE_INC 10000
 #define DEPTAB_INC 10
@@ -49,8 +51,8 @@ struct task{
     int join;
     int valid;
 
-    PyObject* future;
-    PyObject* futwrap;
+    PyObject* app_fu;
+    PyObject* exec_fu;
     PyObject* executor;
     PyObject* func;
     PyObject* args;
@@ -66,12 +68,15 @@ static int init_tasktable(unsigned long); // allocate initial amont of memory fo
 static int resize_tasktable(unsigned long); // change amount of memory in table
 static int increment_tasktable(void); // will try to increase table size by TABLE_INC
 
-static int create_task(char*, char*, double, int, PyObject*, PyObject*, PyObject*, PyObject*, PyObject*); // add a task to the dfk
+static int create_task(char*, char*, double, int, PyObject*, PyObject*, PyObject*, PyObject*, PyObject*, PyObject*); // add a task to the dfk
 static int delete_task(unsigned long);
 static inline struct task* get_task(unsigned long);
 static int adddep_task(unsigned long, unsigned long);
 static int chstatus_task(unsigned long, enum state);
 static enum state getstatus_task(unsigned long);
+
+static int init_threads(void);
+static int dest_threads(void);
 
 static PyObject* init_dfk(PyObject*, PyObject*);
 static PyObject* dest_dfk(PyObject*);
@@ -88,6 +93,8 @@ unsigned int executorcount= 0;
 unsigned long tablesize; // number of tasks table can store
 unsigned long taskcount; // number of tasks created
 
+int killswitch_thread = 0;
+
 /*
  * In order to invoke object methods we must provide
  * PyObject_CallMethodObjArgs a PyObject that stores
@@ -96,12 +103,14 @@ unsigned long taskcount; // number of tasks created
  * initialization phase. Likely need to decrement ref
  * counter in destroy dfk phase
  */
-
+PyInterpreterState* pyinterp_state = NULL;
 PyObject* pystr_submit = NULL;
 PyObject* pystr_shutdown = NULL;
 PyObject* pystr_tid = NULL;
+PyObject* pystr_update = NULL;
 PyObject* pystr_done = NULL;
-PyObject* pytyp_execfut = NULL;
+PyObject* pystr_adc = NULL; // add_done_callback
+PyObject* pytyp_appfut = NULL;
 
 static int init_tasktable(unsigned long numtasks){
     tasktable = (struct task*)PyMem_RawMalloc(sizeof(struct task) * numtasks);
@@ -143,7 +152,7 @@ static int increment_tasktable(){
  * just add new task in the next unused spot
  * Returns the id of the task it created TODO, should be an unsigned long
  */
-static int create_task(char* exec_label, char* func_name, double time_invoked, int join, PyObject* future, PyObject* executor, PyObject* func, PyObject* args, PyObject* kwargs){
+static int create_task(char* exec_label, char* func_name, double time_invoked, int join, PyObject* app_fu, PyObject* exec_fu, PyObject* executor, PyObject* func, PyObject* args, PyObject* kwargs){
     // check if the table is large enough
     if(taskcount == tablesize)
         if(increment_tasktable() < 0)
@@ -162,7 +171,8 @@ static int create_task(char* exec_label, char* func_name, double time_invoked, i
     task->time_invoked = time_invoked;
     task->join = join;
 
-    task->future = future;
+    task->app_fu = app_fu;
+    task->exec_fu = exec_fu;
     task->executor = executor;
     task->func = func;
     task->args = args;
@@ -213,18 +223,33 @@ static enum state getstatus_task(unsigned long task_id){
     return task->status;
 }
 
+static int init_threads(void){
+    return 0;
+}
+
+static int dest_threads(void){
+    killswitch_thread = 1;
+    return 0;
+}
+
 static PyObject* init_dfk(PyObject* self, PyObject* args){
     unsigned long numtasks;
-    if(!PyArg_ParseTuple(args, "kO", &numtasks, &pytyp_execfut))
+    if(!PyArg_ParseTuple(args, "kO", &numtasks, &pytyp_appfut))
         return NULL;
 
     if(init_tasktable(numtasks) < 0)
         return PyErr_Format(PyExc_RuntimeError, "CDFK failed to initialize task table");
-
+    pyinterp_state = PyInterpreterState_Get();
     pystr_submit = Py_BuildValue("s", "submit");
     pystr_shutdown = Py_BuildValue("s", "shutdown");
     pystr_tid = Py_BuildValue("s", "tid");
+    pystr_update = Py_BuildValue("s", "update");
     pystr_done = Py_BuildValue("s", "done");
+    pystr_adc = Py_BuildValue("s", "add_done_callback");
+
+    if(init_threads() < 0)
+        return PyErr_Format(PyExc_RuntimeError, "CDFK failed to initialize threads");
+
     return Py_None;
 }
 
@@ -235,6 +260,8 @@ static PyObject* init_dfk(PyObject* self, PyObject* args){
  * issue then we should make sure that this is the case
  */
 static PyObject* dest_dfk(PyObject* self){
+    if(dest_threads() < 0)
+        ; // TODO Find something to do when attempt to shutdown threads fails
     if(tasktable != NULL){
         for(unsigned long index = 0; index < tablesize; index++){
             delete_task(index);
@@ -247,7 +274,9 @@ static PyObject* dest_dfk(PyObject* self){
     Py_XDECREF(pystr_submit);
     Py_XDECREF(pystr_shutdown);
     Py_XDECREF(pystr_tid);
+    Py_XDECREF(pystr_update);
     Py_XDECREF(pystr_done);
+    Py_XDECREF(pystr_adc);
 
     return Py_None;
 }
@@ -327,7 +356,7 @@ static PyObject* submit(PyObject* self, PyObject* args){
         exec = executors[(rand() % executorcount-1) + 1];
     }
 
-    if((task_id = create_task(exec.label, func_name, time_invoked, join, Py_None, exec.obj, func, fargs, fkwargs)) < 0)
+    if((task_id = create_task(exec.label, func_name, time_invoked, join, Py_None, Py_None, exec.obj, func, fargs, fkwargs)) < 0)
         return PyErr_Format(PyExc_RuntimeError, "CDFK failed to create new task and append it to task table");
     struct task* task = get_task(task_id);
 
@@ -335,7 +364,7 @@ static PyObject* submit(PyObject* self, PyObject* args){
     arglist_len = PyList_Size(arglist);
     for(i = 0; i < arglist_len; i++){
         PyObject* item = PyList_GetItem(arglist, i);
-        if(!PyObject_IsInstance(item, pytyp_execfut))
+        if(!PyObject_IsInstance(item, pytyp_appfut))
             continue;
         if(PyObject_IsTrue(PyObject_CallMethodNoArgs(item, pystr_done))){
             // got a dependency that happens to be already done
@@ -353,10 +382,11 @@ static PyObject* submit(PyObject* self, PyObject* args){
     }
 
     if(getstatus_task(task_id) == pending){
-        PyObject* futwrap_arglist = Py_BuildValue("Oi", Py_None, task_id);
-        PyObject* futwrap = PyObject_CallObject(pytyp_execfut, futwrap_arglist);
-        Py_DECREF(futwrap_arglist);
-        return futwrap;
+        PyObject* appfu_arglist = Py_BuildValue("Oi", Py_None, task_id);
+        PyObject* app_fu = PyObject_CallObject(pytyp_appfut, appfu_arglist);
+        Py_DECREF(appfu_arglist);
+        task->app_fu = app_fu;
+        return app_fu;
     }
     else{
         // invoke executor submit function
@@ -364,10 +394,16 @@ static PyObject* submit(PyObject* self, PyObject* args){
         if(exec_fu == NULL)
             return NULL;
 
-        PyObject* futwrap_arglist = Py_BuildValue("Oi", exec_fu, task_id);
-        PyObject* futwrap = PyObject_CallObject(pytyp_execfut, futwrap_arglist);
-        Py_DECREF(futwrap_arglist);
-        return futwrap;
+        chstatus_task(task_id, launched);
+        PyObject* appfu_arglist = Py_BuildValue("Oi", exec_fu, task_id);
+        PyObject* app_fu = PyObject_CallObject(pytyp_appfut, appfu_arglist);
+        PyObject* done_callback = PyObject_GetAttr(app_fu, pystr_update);
+        PyObject_CallMethodOneArg(exec_fu, pystr_adc, done_callback);
+        Py_DECREF(appfu_arglist);
+        Py_DECREF(done_callback); // TODO Does this need to be here? -> Does PyObject_GetAttr increment refernce counter?
+        task->exec_fu = exec_fu;
+        task->app_fu = app_fu;
+        return app_fu;
     }
 }
 

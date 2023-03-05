@@ -75,6 +75,9 @@ class AppFuture(Future):
         self._outputs: Sequence[DataFuture]
         self._outputs = []
 
+    def update(self, future):
+        self.set_result(future.result())
+
     @property
     def stdout(self) -> Optional[str]:
         raise NotImplementedError("Stdout not implemented")

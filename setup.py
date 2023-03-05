@@ -52,7 +52,7 @@ setup(
                'parsl/executors/workqueue/exec_parsl_function.py',
     ],
 
-    ext_modules=[Extension("cdflow", ["parsl/dataflow/dflow.c"])],
+    ext_modules=[Extension("cdflow", ["parsl/dataflow/dflow.c"], libraries=["pthread"])],
     extras_require=extras_require,
     classifiers=[
         # Maturity
