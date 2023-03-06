@@ -44,7 +44,8 @@ struct task{
     enum state status;
     unsigned long* depends;
     unsigned long depsize;
-    unsigned long depcount;
+    unsigned long depcount; // number of task dependent on it
+    unsigned long depon; // number of task it depends on
     char* exec_label; // Initialized by PyArg_Parse, who keeps track of memory
     char* func_name;
     double time_invoked;
@@ -85,7 +86,9 @@ static PyObject* info_exec_dfk(PyObject*);
 static PyObject* add_executor_dfk(PyObject*, PyObject*);
 static PyObject* shutdown_executor_dfk(PyObject*);
 static PyObject* info_task(PyObject*, PyObject*);
+static PyObject* resdep_task(PyObject*, PyObject*); // resolve dependency
 static PyObject* submit(PyObject*, PyObject*);
+static PyObject* launch(PyObject*, PyObject*, PyObject*, PyObject*);
 
 struct task* tasktable = NULL; // dag represented as table of task structs
 struct executor executors[EXEC_COUNT]; // Array of executor structs that store the label, 10 executor cap right now
@@ -110,7 +113,10 @@ PyObject* pystr_tid = NULL;
 PyObject* pystr_update = NULL;
 PyObject* pystr_done = NULL;
 PyObject* pystr_adc = NULL; // add_done_callback
+PyObject* pystr_setfut = NULL;
 PyObject* pytyp_appfut = NULL;
+PyObject* pyfun_unwrapfut = NULL;
+PyObject* pyfun_execsubwrapper = NULL;
 
 static int init_tasktable(unsigned long numtasks){
     tasktable = (struct task*)PyMem_RawMalloc(sizeof(struct task) * numtasks);
@@ -165,6 +171,7 @@ static int create_task(char* exec_label, char* func_name, double time_invoked, i
     task->depends = NULL;
     task->depsize = 0;
     task->depcount = 0;
+    task->depon = 0;
 
     task->exec_label = exec_label;
     task->func_name = func_name;
@@ -179,6 +186,13 @@ static int create_task(char* exec_label, char* func_name, double time_invoked, i
     task->kwargs = kwargs;
     task->valid = 1;
 
+    Py_INCREF(task->app_fu);
+    Py_INCREF(task->exec_fu);
+    Py_INCREF(task->executor);
+    Py_INCREF(task->func);
+    Py_INCREF(task->args);
+    Py_INCREF(task->kwargs);
+
     return task->id;
 }
 
@@ -189,6 +203,15 @@ static int delete_task(unsigned long task_id){
     if(task->depends){
         PyMem_RawFree(task->depends);
     }
+
+    // FIXME gotta figure out which of these is being deleted before hand, one of these is causing the garbage collector to segfault
+    //Py_DECREF(task->app_fu);
+    //Py_DECREF(task->exec_fu);
+    //Py_DECREF(task->executor);
+    //Py_DECREF(task->func);
+    //Py_DECREF(task->args);
+    //Py_DECREF(task->kwargs);
+
     task->valid = 0;
     return 0;
 }
@@ -198,17 +221,19 @@ static inline struct task* get_task(unsigned long task_id){
 }
 
 static int adddep_task(unsigned long task_id, unsigned long dep_id){
+    struct task* dep = get_task(dep_id);
     struct task* task = get_task(task_id);
-    if(!task->depends){ // has not malloced for depends matrix
-        task->depends = (unsigned long*)PyMem_RawMalloc(sizeof(unsigned long) * DEPTAB_INC);
-        task->depsize = DEPTAB_INC;
+    if(!dep->depends){ // has not malloced for depends array
+        dep->depends = (unsigned long*)PyMem_RawMalloc(sizeof(unsigned long) * DEPTAB_INC);
+        dep->depsize = DEPTAB_INC;
     }
-    else if(task->depcount >= task->depsize){ // need to resize the dep count array
-        task->depends = (unsigned long*)PyMem_RawRealloc(task->depends, sizeof(unsigned long) * (task->depsize + DEPTAB_INC));
-        task->depsize += DEPTAB_INC;
+    else if(dep->depcount >= dep->depsize){ // need to resize the dep count array
+        dep->depends = (unsigned long*)PyMem_RawRealloc(dep->depends, sizeof(unsigned long) * (dep->depsize + DEPTAB_INC));
+        dep->depsize += DEPTAB_INC;
     }
-    task->depends[task->depcount] = dep_id;
-    task->depcount++;
+    dep->depends[dep->depcount] = task_id;
+    dep->depcount++;
+    task->depon++;
     return 0;
 }
 
@@ -234,7 +259,7 @@ static int dest_threads(void){
 
 static PyObject* init_dfk(PyObject* self, PyObject* args){
     unsigned long numtasks;
-    if(!PyArg_ParseTuple(args, "kO", &numtasks, &pytyp_appfut))
+    if(!PyArg_ParseTuple(args, "kOOO", &numtasks, &pytyp_appfut, &pyfun_unwrapfut, &pyfun_execsubwrapper))
         return NULL;
 
     if(init_tasktable(numtasks) < 0)
@@ -246,6 +271,7 @@ static PyObject* init_dfk(PyObject* self, PyObject* args){
     pystr_update = Py_BuildValue("s", "update");
     pystr_done = Py_BuildValue("s", "done");
     pystr_adc = Py_BuildValue("s", "add_done_callback");
+    pystr_setfut = Py_BuildValue("s", "setfut");
 
     if(init_threads() < 0)
         return PyErr_Format(PyExc_RuntimeError, "CDFK failed to initialize threads");
@@ -277,6 +303,7 @@ static PyObject* dest_dfk(PyObject* self){
     Py_XDECREF(pystr_update);
     Py_XDECREF(pystr_done);
     Py_XDECREF(pystr_adc);
+    Py_XDECREF(pystr_setfut);
 
     return Py_None;
 }
@@ -332,6 +359,46 @@ static PyObject* info_task(PyObject* self, PyObject* args){
                                 task->id, task->status, task->depcount, task->exec_label, task->func_name, (int)task->time_invoked, task->join);
 }
 
+static PyObject* resdep_task(PyObject* self, PyObject* args){ // resolve dependency
+    unsigned long task_id, dep_id, depindex;
+    struct task* task,* dep;
+    if(!PyArg_ParseTuple(args, "k", &task_id))
+        return NULL;
+
+    task = get_task(task_id);
+    if(!task->depcount)
+        return Py_None;
+
+    printf("Resolving dependencies for task %lu\n", task_id);
+    fflush(0);
+    for(depindex = 0; depindex < task->depcount; depindex++){
+        dep_id = task->depends[depindex];
+        // fflush(0);
+        dep = get_task(dep_id);
+        dep->depon--;
+        // printf("Dependent task %lu is dependent on %lu other task\n", dep->id, dep->depon);
+        //PyObject_Print(pystr_submit, stdout, 0);
+        //fflush(0);
+        if(dep->depon > 0)
+            continue;
+
+        printf("Ready to launch task %lu\n", dep->id);
+        // fflush(0);
+        // printf("Attempting to launch %lu with exec: %p func: %p args: %p kwargs: %p\n", dep->id, dep->executor, dep->func, dep->args, dep->kwargs);
+        PyObject* exec_fu = launch(dep->executor, dep->func, dep->args, dep->kwargs);
+        if(exec_fu == NULL)
+            return NULL;
+
+        chstatus_task(dep_id, launched);
+        PyObject* done_callback = PyObject_GetAttr(dep->app_fu, pystr_update);
+        PyObject_CallMethodOneArg(exec_fu, pystr_adc, done_callback);
+        dep->exec_fu = exec_fu;
+        PyObject_CallMethodOneArg(dep->app_fu, pystr_setfut, exec_fu);
+        Py_DECREF(done_callback);
+    }
+    return Py_None;
+}
+
 /*
  * TODO When freeing a task will need to decrement the refernce counts
  * of the python objects taken as a argument
@@ -342,9 +409,9 @@ static PyObject* submit(PyObject* self, PyObject* args){
     unsigned long task_id, dep_id;
     double time_invoked;
     struct executor exec;
-    PyObject* execsubmit_wrapper = NULL,* func = NULL,* fargs=NULL,* fkwargs=NULL,* exec_fu=NULL,* arglist = NULL;
+    PyObject* func = NULL,* fargs=NULL,* fkwargs=NULL,* exec_fu=NULL,* arglist = NULL;
 
-    if(!PyArg_ParseTuple(args, "sdpOO|OOO", &func_name, &time_invoked, &join, &execsubmit_wrapper, &func, &fargs, &fkwargs, &arglist))
+    if(!PyArg_ParseTuple(args, "sdpO|OOO", &func_name, &time_invoked, &join, &func, &fargs, &fkwargs, &arglist))
         return NULL;
 
     if(join){
@@ -381,6 +448,7 @@ static PyObject* submit(PyObject* self, PyObject* args){
         chstatus_task(task_id, pending);
     }
 
+    // if no dependencies launch, if depedencies don't
     if(getstatus_task(task_id) == pending){
         PyObject* appfu_arglist = Py_BuildValue("Oi", Py_None, task_id);
         PyObject* app_fu = PyObject_CallObject(pytyp_appfut, appfu_arglist);
@@ -390,7 +458,7 @@ static PyObject* submit(PyObject* self, PyObject* args){
     }
     else{
         // invoke executor submit function
-        exec_fu = PyObject_CallFunctionObjArgs(execsubmit_wrapper, exec.obj, func, fargs, fkwargs, NULL);
+        exec_fu = launch(exec.obj, func, fargs, fkwargs);
         if(exec_fu == NULL)
             return NULL;
 
@@ -407,6 +475,18 @@ static PyObject* submit(PyObject* self, PyObject* args){
     }
 }
 
+static PyObject* launch(PyObject* executor, PyObject* func, PyObject* args, PyObject* kwargs){
+    PyObject* ret = PyObject_CallFunctionObjArgs(pyfun_unwrapfut, args, kwargs, NULL);
+    PyObject* newargs = PyTuple_GetItem(ret, 0);
+    PyObject* newkwargs = PyTuple_GetItem(ret, 1);
+    PyObject* exec_fu = PyObject_CallFunctionObjArgs(pyfun_execsubwrapper, executor, func, newargs,newkwargs, NULL);
+
+    Py_DECREF(newargs);
+    Py_DECREF(newkwargs);
+    Py_DECREF(ret);
+    return exec_fu;
+}
+
 char init_dfk_docs[] = "This method will initialize the dfk. In doing so this method will allocate memory for the dag and reset global state.";
 char dest_dfk_docs[] = "This method will destroy the dfk. In doing so this method will dealocate memory for the dag and reset global state.";
 char info_dfk_docs[] = "This method prints the global state associated with the dfk.";
@@ -415,6 +495,7 @@ char add_executor_dfk_docs[] = "This method appends a new executor to the execut
 char shutdown_executor_dfk_docs[] = "Loops through all the executor PyObjects stored in executors array and invokes their shutdown function";
 char submit_docs[] = "Takes in a function and its arguments, creates a task in the dag, and invokes executor.submit";
 char info_task_docs[] = "takes as input an id as an int and returns information about a the task with that id";
+char resdep_task_docs[] = "Takes in a task id and decrements the depcount of all the task dependent on it";
 
 PyMethodDef cdflow_funcs[] = {
     {"init_dfk", (PyCFunction)init_dfk, METH_VARARGS, init_dfk_docs},
@@ -425,6 +506,7 @@ PyMethodDef cdflow_funcs[] = {
     {"add_executor_dfk", (PyCFunction)add_executor_dfk, METH_VARARGS, add_executor_dfk_docs},
     {"shutdown_executor_dfk", (PyCFunction)shutdown_executor_dfk, METH_NOARGS, shutdown_executor_dfk_docs},
     {"submit", (PyCFunction)submit, METH_VARARGS, submit_docs},
+    {"resdep_task", (PyCFunction)resdep_task, METH_VARARGS, resdep_task_docs},
     {NULL}
 };
 

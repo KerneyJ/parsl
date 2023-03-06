@@ -7,6 +7,7 @@ We have two basic types of futures:
 """
 
 from concurrent.futures import Future
+import cdflow
 import logging
 import threading
 import warnings
@@ -77,6 +78,10 @@ class AppFuture(Future):
 
     def update(self, future):
         self.set_result(future.result())
+        cdflow.resdep_task(self._tid)
+
+    def setfut(self, exec_fu: Future):
+        self.exec_fu = exec_fu
 
     @property
     def stdout(self) -> Optional[str]:
