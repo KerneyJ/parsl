@@ -45,6 +45,7 @@ struct task{
     unsigned long* depends;
     unsigned long depsize;
     unsigned long depcount;
+    unsigned long depon;
     char* exec_label; // Initialized by PyArg_Parse, who keeps track of memory
     char* func_name;
     double time_invoked;
@@ -168,6 +169,7 @@ static int create_task(char* exec_label, char* func_name, double time_invoked, i
     task->depends = NULL;
     task->depsize = 0;
     task->depcount = 0;
+    task->depon = 0;
 
     task->exec_label = exec_label;
     task->func_name = func_name;
@@ -201,17 +203,22 @@ static inline struct task* get_task(unsigned long task_id){
 }
 
 static int adddep_task(unsigned long task_id, unsigned long dep_id){
+    /*
+     * Task task_id is dependent on task dep_id
+     */
     struct task* task = get_task(task_id);
-    if(!task->depends){ // has not malloced for depends matrix
-        task->depends = (unsigned long*)PyMem_RawMalloc(sizeof(unsigned long) * DEPTAB_INC);
-        task->depsize = DEPTAB_INC;
+    struct task* dep = get_task(dep_id);
+    if(!dep->depends){ // has not malloced for depends matrix
+        dep->depends = (unsigned long*)PyMem_RawMalloc(sizeof(unsigned long) * DEPTAB_INC);
+        dep->depsize = DEPTAB_INC;
     }
-    else if(task->depcount >= task->depsize){ // need to resize the dep count array
-        task->depends = (unsigned long*)PyMem_RawRealloc(task->depends, sizeof(unsigned long) * (task->depsize + DEPTAB_INC));
-        task->depsize += DEPTAB_INC;
+    else if(dep->depcount >= dep->depsize){ // need to resize the dep count array
+        dep->depends = (unsigned long*)PyMem_RawRealloc(dep->depends, sizeof(unsigned long) * (dep->depsize + DEPTAB_INC));
+        dep->depsize += DEPTAB_INC;
     }
-    task->depends[task->depcount] = dep_id;
-    task->depcount++;
+    dep->depends[dep->depcount] = dep_id;
+    dep->depcount++;
+    task->depon++;
     return 0;
 }
 
@@ -369,6 +376,7 @@ static PyObject* submit(PyObject* self, PyObject* args){
         PyObject* item = PyList_GetItem(arglist, i);
         if(!PyObject_IsInstance(item, pytyp_appfut))
             continue;
+
         if(PyObject_IsTrue(PyObject_CallMethodNoArgs(item, pystr_done))){
             // got a dependency that happens to be already done
             // TODO Figure out someway to replace the value in fargs or fkwargs with the result
@@ -379,7 +387,8 @@ static PyObject* submit(PyObject* self, PyObject* args){
         else{
             PyObject* pylong_tid = PyObject_GetAttr(item, pystr_tid);
             dep_id = (unsigned long)PyLong_AsLong(pylong_tid);
-            adddep_task(task_id, dep_id);
+            if(adddep_task(task_id, dep_id) < 0)
+                return PyErr_Format(PyExc_RuntimeError, "Failed to add depedency");
         }
         chstatus_task(task_id, pending);
     }
