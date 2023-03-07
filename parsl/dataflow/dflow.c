@@ -86,6 +86,7 @@ static PyObject* add_executor_dfk(PyObject*, PyObject*);
 static PyObject* shutdown_executor_dfk(PyObject*);
 static PyObject* info_task(PyObject*, PyObject*);
 static PyObject* submit(PyObject*, PyObject*);
+static PyObject* launch(PyObject*, PyObject*, PyObject*, PyObject*);
 
 struct task* tasktable = NULL; // dag represented as table of task structs
 struct executor executors[EXEC_COUNT]; // Array of executor structs that store the label, 10 executor cap right now
@@ -111,6 +112,8 @@ PyObject* pystr_update = NULL;
 PyObject* pystr_done = NULL;
 PyObject* pystr_adc = NULL; // add_done_callback
 PyObject* pytyp_appfut = NULL;
+PyObject* pyfun_unwrapfut = NULL;
+PyObject* pyfun_execsubwrapper = NULL;
 
 static int init_tasktable(unsigned long numtasks){
     tasktable = (struct task*)PyMem_RawMalloc(sizeof(struct task) * numtasks);
@@ -234,7 +237,7 @@ static int dest_threads(void){
 
 static PyObject* init_dfk(PyObject* self, PyObject* args){
     unsigned long numtasks;
-    if(!PyArg_ParseTuple(args, "kO", &numtasks, &pytyp_appfut))
+    if(!PyArg_ParseTuple(args, "kOOO", &numtasks, &pytyp_appfut, &pyfun_unwrapfut, &pyfun_execsubwrapper))
         return NULL;
 
     if(init_tasktable(numtasks) < 0)
@@ -342,9 +345,9 @@ static PyObject* submit(PyObject* self, PyObject* args){
     unsigned long task_id, dep_id;
     double time_invoked;
     struct executor exec;
-    PyObject* execsubmit_wrapper = NULL,* func = NULL,* fargs=NULL,* fkwargs=NULL,* exec_fu=NULL,* arglist = NULL;
+    PyObject* func = NULL,* fargs=NULL,* fkwargs=NULL,* exec_fu=NULL,* arglist = NULL;
 
-    if(!PyArg_ParseTuple(args, "sdpOO|OOO", &func_name, &time_invoked, &join, &execsubmit_wrapper, &func, &fargs, &fkwargs, &arglist))
+    if(!PyArg_ParseTuple(args, "sdpO|OOO", &func_name, &time_invoked, &join, &func, &fargs, &fkwargs, &arglist))
         return NULL;
 
     if(join){
@@ -390,7 +393,7 @@ static PyObject* submit(PyObject* self, PyObject* args){
     }
     else{
         // invoke executor submit function
-        exec_fu = PyObject_CallFunctionObjArgs(execsubmit_wrapper, exec.obj, func, fargs, fkwargs, NULL);
+        exec_fu = launch(exec.obj, func, fargs, fkwargs);
         if(exec_fu == NULL)
             return NULL;
 
@@ -405,6 +408,16 @@ static PyObject* submit(PyObject* self, PyObject* args){
         task->app_fu = app_fu;
         return app_fu;
     }
+}
+
+static PyObject* launch(PyObject* executor, PyObject* func, PyObject* args, PyObject* kwargs){
+    PyObject* ret = PyObject_CallFunctionObjArgs(pyfun_unwrapfut, args, kwargs, NULL);
+    PyObject* newargs = PyTuple_GetItem(ret, 0);
+    PyObject* newkwargs = PyTuple_GetItem(ret, 1);
+    PyObject* exec_fu = PyObject_CallFunctionObjArgs(pyfun_execsubwrapper, executor, func, newargs, newkwargs, NULL);
+
+    Py_DECREF(ret);
+    return exec_fu;
 }
 
 char init_dfk_docs[] = "This method will initialize the dfk. In doing so this method will allocate memory for the dag and reset global state.";

@@ -78,7 +78,7 @@ class DataFlowKernel(object):
         """
 
         # this will be used to check cleanup only happens once
-        cdflow.init_dfk(10000, AppFuture) # Allocate an initial task table size of 10,000
+        cdflow.init_dfk(10000, AppFuture, self._unwrap_futures, self.execsubmit_wrapper) # Allocate an initial task table size of 10,000
         self.cleanup_called = False
 
         self._config = config
@@ -747,7 +747,8 @@ class DataFlowKernel(object):
 
         return depends
 
-    def _unwrap_futures(self, args, kwargs):
+    @staticmethod
+    def _unwrap_futures(args, kwargs):
         """This function should be called when all dependencies have completed.
 
         It will rewrite the arguments for that task, replacing each Future
@@ -844,7 +845,7 @@ class DataFlowKernel(object):
 
         """
         logger.info(f"Args: {app_args}, Kwargs: {app_kwargs}")
-        return cdflow.submit(func.__name__, time.time(), join, self.execsubmit_wrapper, func, app_args, app_kwargs, list(app_args) + list(app_kwargs.values()))
+        return cdflow.submit(func.__name__, time.time(), join, func, app_args, app_kwargs, list(app_args) + list(app_kwargs.values()))
 
     # it might also be interesting to assert that all DFK
     # tasks are in a "final" state (3,4,5) when the DFK
