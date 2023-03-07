@@ -97,6 +97,7 @@ unsigned long tablesize; // number of tasks table can store
 unsigned long taskcount; // number of tasks created
 
 int killswitch_thread = 0;
+pthread_mutex_t resdep_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /*
  * In order to invoke object methods we must provide
@@ -360,34 +361,32 @@ static PyObject* info_task(PyObject* self, PyObject* args){
 }
 
 static PyObject* resdep_task(PyObject* self, PyObject* args){ // resolve dependency
+    pthread_mutex_lock(&resdep_mutex);
     unsigned long task_id, dep_id, depindex;
     struct task* task,* dep;
-    if(!PyArg_ParseTuple(args, "k", &task_id))
+    if(!PyArg_ParseTuple(args, "k", &task_id)){
+        pthread_mutex_unlock(&resdep_mutex);
         return NULL;
+    }
 
     task = get_task(task_id);
-    if(!task->depcount)
+    if(!task->depcount){
+        pthread_mutex_unlock(&resdep_mutex);
         return Py_None;
+    }
 
-    printf("Resolving dependencies for task %lu\n", task_id);
-    fflush(0);
     for(depindex = 0; depindex < task->depcount; depindex++){
         dep_id = task->depends[depindex];
-        // fflush(0);
         dep = get_task(dep_id);
         dep->depon--;
-        // printf("Dependent task %lu is dependent on %lu other task\n", dep->id, dep->depon);
-        //PyObject_Print(pystr_submit, stdout, 0);
-        //fflush(0);
         if(dep->depon > 0)
             continue;
 
-        printf("Ready to launch task %lu\n", dep->id);
-        // fflush(0);
-        // printf("Attempting to launch %lu with exec: %p func: %p args: %p kwargs: %p\n", dep->id, dep->executor, dep->func, dep->args, dep->kwargs);
         PyObject* exec_fu = launch(dep->executor, dep->func, dep->args, dep->kwargs);
-        if(exec_fu == NULL)
+        if(exec_fu == NULL){
+            pthread_mutex_unlock(&resdep_mutex);
             return NULL;
+        }
 
         chstatus_task(dep_id, launched);
         PyObject* done_callback = PyObject_GetAttr(dep->app_fu, pystr_update);
@@ -396,6 +395,7 @@ static PyObject* resdep_task(PyObject* self, PyObject* args){ // resolve depende
         PyObject_CallMethodOneArg(dep->app_fu, pystr_setfut, exec_fu);
         Py_DECREF(done_callback);
     }
+    pthread_mutex_unlock(&resdep_mutex);
     return Py_None;
 }
 
