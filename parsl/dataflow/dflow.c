@@ -216,7 +216,7 @@ static int adddep_task(unsigned long task_id, unsigned long dep_id){
         dep->depends = (unsigned long*)PyMem_RawRealloc(dep->depends, sizeof(unsigned long) * (dep->depsize + DEPTAB_INC));
         dep->depsize += DEPTAB_INC;
     }
-    dep->depends[dep->depcount] = dep_id;
+    dep->depends[dep->depcount] = task_id;
     dep->depcount++;
     task->depon++;
     return 0;
