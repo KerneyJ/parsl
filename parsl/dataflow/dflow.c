@@ -73,8 +73,6 @@ static int create_task(char*, char*, double, int, PyObject*, PyObject*, PyObject
 static int delete_task(unsigned long);
 static inline struct task* get_task(unsigned long);
 static int adddep_task(unsigned long, unsigned long);
-static int chstatus_task(unsigned long, enum state);
-static enum state getstatus_task(unsigned long);
 
 static int init_threads(void);
 static int dest_threads(void);
@@ -220,17 +218,6 @@ static int adddep_task(unsigned long task_id, unsigned long dep_id){
     dep->depcount++;
     task->depon++;
     return 0;
-}
-
-static int chstatus_task(unsigned long task_id, enum state status){
-    struct task* task = get_task(task_id);
-    task->status = status;
-    return 0;
-}
-
-static enum state getstatus_task(unsigned long task_id){
-    struct task* task = get_task(task_id);
-    return task->status;
 }
 
 static int init_threads(void){
@@ -390,10 +377,10 @@ static PyObject* submit(PyObject* self, PyObject* args){
             if(adddep_task(task_id, dep_id) < 0)
                 return PyErr_Format(PyExc_RuntimeError, "Failed to add depedency");
         }
-        chstatus_task(task_id, pending);
+        task->status = pending;
     }
 
-    if(getstatus_task(task_id) == pending){
+    if(task->status == pending){
         PyObject* appfu_arglist = Py_BuildValue("Oi", Py_None, task_id);
         PyObject* app_fu = PyObject_CallObject(pytyp_appfut, appfu_arglist);
         Py_DECREF(appfu_arglist);
@@ -406,7 +393,7 @@ static PyObject* submit(PyObject* self, PyObject* args){
         if(exec_fu == NULL)
             return NULL;
 
-        chstatus_task(task_id, launched);
+        task->status = launched;
         PyObject* appfu_arglist = Py_BuildValue("Oi", exec_fu, task_id);
         PyObject* app_fu = PyObject_CallObject(pytyp_appfut, appfu_arglist);
         PyObject* done_callback = PyObject_GetAttr(app_fu, pystr_update);
