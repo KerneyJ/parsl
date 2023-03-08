@@ -479,10 +479,8 @@ static PyObject* launch(PyObject* executor, PyObject* func, PyObject* args, PyOb
     PyObject* ret = PyObject_CallFunctionObjArgs(pyfun_unwrapfut, args, kwargs, NULL);
     PyObject* newargs = PyTuple_GetItem(ret, 0);
     PyObject* newkwargs = PyTuple_GetItem(ret, 1);
-    PyObject* exec_fu = PyObject_CallFunctionObjArgs(pyfun_execsubwrapper, executor, func, newargs,newkwargs, NULL);
+    PyObject* exec_fu = PyObject_CallFunctionObjArgs(pyfun_execsubwrapper, executor, func, newargs, newkwargs, NULL);
 
-    Py_DECREF(newargs);
-    Py_DECREF(newkwargs);
     Py_DECREF(ret);
     return exec_fu;
 }
