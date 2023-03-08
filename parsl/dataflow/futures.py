@@ -77,6 +77,10 @@ class AppFuture(Future):
 
     def update(self, future):
         self.set_result(future.result())
+        cdflow.resdep_task(self._tid);
+
+    def setfut(self, exec_fu: Future):
+        self._exec_fu = exec_fu
 
     @property
     def stdout(self) -> Optional[str]:

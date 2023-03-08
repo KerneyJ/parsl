@@ -73,6 +73,7 @@ static int create_task(char*, char*, double, int, PyObject*, PyObject*, PyObject
 static int delete_task(unsigned long);
 static inline struct task* get_task(unsigned long);
 static int adddep_task(unsigned long, unsigned long);
+static PyObject* resdep_task(PyObject*, PyObject*);
 
 static int init_threads(void);
 static int dest_threads(void);
@@ -94,6 +95,8 @@ unsigned long tablesize; // number of tasks table can store
 unsigned long taskcount; // number of tasks created
 
 int killswitch_thread = 0;
+pthread_mutex_t create_lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t resdep_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /*
  * In order to invoke object methods we must provide
@@ -105,6 +108,7 @@ int killswitch_thread = 0;
  */
 PyInterpreterState* pyinterp_state = NULL;
 PyObject* pystr_submit = NULL;
+PyObject* pystr_setfu = NULL;
 PyObject* pystr_shutdown = NULL;
 PyObject* pystr_tid = NULL;
 PyObject* pystr_update = NULL;
@@ -156,9 +160,12 @@ static int increment_tasktable(){
  */
 static int create_task(char* exec_label, char* func_name, double time_invoked, int join, PyObject* app_fu, PyObject* exec_fu, PyObject* executor, PyObject* func, PyObject* args, PyObject* kwargs){
     // check if the table is large enough
+    pthread_mutex_lock(&create_lock);
     if(taskcount == tablesize)
-        if(increment_tasktable() < 0)
+        if(increment_tasktable() < 0){
+            pthread_mutex_unlock(&create_lock);
             return -1;
+        }
 
     struct task* task = get_task(taskcount);
     task->id = taskcount;
@@ -182,6 +189,9 @@ static int create_task(char* exec_label, char* func_name, double time_invoked, i
     task->kwargs = kwargs;
     task->valid = 1;
 
+    Py_INCREF(args);
+    Py_INCREF(kwargs);
+    pthread_mutex_unlock(&create_lock);
     return task->id;
 }
 
@@ -192,6 +202,10 @@ static int delete_task(unsigned long task_id){
     if(task->depends){
         PyMem_RawFree(task->depends);
     }
+
+    Py_DECREF(task->args);
+    Py_DECREF(task->kwargs);
+
     task->valid = 0;
     return 0;
 }
@@ -220,6 +234,39 @@ static int adddep_task(unsigned long task_id, unsigned long dep_id){
     return 0;
 }
 
+static PyObject* resdep_task(PyObject* self, PyObject* args){
+    unsigned long task_id, dep_id, depindex;
+    struct task* task,* dep;
+    if(!PyArg_ParseTuple(args, "k", &task_id))
+        return NULL;
+    pthread_mutex_lock(&resdep_lock);
+    task = get_task(task_id);
+    if(task->depcount == 0){
+        pthread_mutex_unlock(&resdep_lock);
+        return Py_None;
+    }
+
+    for(depindex = 0; depindex < task->depcount; depindex++){
+        dep_id = task->depends[depindex];
+        dep = get_task(dep_id);
+        dep->depon--;
+        if(dep->depon > 0)
+            continue;
+        PyObject* exec_fu = launch(dep->executor, dep->func, dep->args, dep->kwargs);
+        if(exec_fu == NULL){
+            pthread_mutex_unlock(&resdep_lock);
+            return NULL;
+        }
+
+        dep->status = launched;
+        PyObject* done_callback = PyObject_GetAttr(dep->app_fu, pystr_update);
+        PyObject_CallMethodOneArg(exec_fu, pystr_adc, done_callback);
+        dep->exec_fu = exec_fu;
+        PyObject_CallMethodOneArg(dep->app_fu, pystr_setfu, exec_fu);
+    }
+    pthread_mutex_unlock(&resdep_lock);
+}
+
 static int init_threads(void){
     return 0;
 }
@@ -238,6 +285,7 @@ static PyObject* init_dfk(PyObject* self, PyObject* args){
         return PyErr_Format(PyExc_RuntimeError, "CDFK failed to initialize task table");
     pyinterp_state = PyInterpreterState_Get();
     pystr_submit = Py_BuildValue("s", "submit");
+    PyObject* pystr_setfu = Py_BuildValue("s", "setfu");
     pystr_shutdown = Py_BuildValue("s", "shutdown");
     pystr_tid = Py_BuildValue("s", "tid");
     pystr_update = Py_BuildValue("s", "update");
@@ -265,6 +313,10 @@ static PyObject* dest_dfk(PyObject* self){
         }
         PyMem_RawFree(tasktable);
     }
+
+    for(int i = 0; i < executorcount; i++)
+        Py_DECREF(executors[i].obj);
+
     tablesize = 0;
     taskcount = 0;
 
@@ -297,7 +349,7 @@ static PyObject* add_executor_dfk(PyObject* self, PyObject* args){
         return PyErr_Format(PyExc_RuntimeError, "CDFK failed to add new executor, %i executors are supported", EXEC_COUNT);
     if(!PyArg_ParseTuple(args, "Os", &executor, &exec_label)) // TODO type check executor object to make sure it isn't a list, tuple, or other iterable
         return NULL;
-
+    Py_INCREF(executor);
     executors[executorcount].obj = executor;
     executors[executorcount].label = exec_label;
     executorcount++;
@@ -399,7 +451,7 @@ static PyObject* submit(PyObject* self, PyObject* args){
         PyObject* done_callback = PyObject_GetAttr(app_fu, pystr_update);
         PyObject_CallMethodOneArg(exec_fu, pystr_adc, done_callback);
         Py_DECREF(appfu_arglist);
-        Py_DECREF(done_callback); // TODO Does this need to be here? -> Does PyObject_GetAttr increment refernce counter?
+        // Py_DECREF(done_callback); // TODO Does this need to be here? -> Does PyObject_GetAttr increment refernce counter?
         task->exec_fu = exec_fu;
         task->app_fu = app_fu;
         return app_fu;
@@ -424,6 +476,7 @@ char add_executor_dfk_docs[] = "This method appends a new executor to the execut
 char shutdown_executor_dfk_docs[] = "Loops through all the executor PyObjects stored in executors array and invokes their shutdown function";
 char submit_docs[] = "Takes in a function and its arguments, creates a task in the dag, and invokes executor.submit";
 char info_task_docs[] = "takes as input an id as an int and returns information about a the task with that id";
+char resdep_task_docs[] = "Resolves the dependencies of a task";
 
 PyMethodDef cdflow_funcs[] = {
     {"init_dfk", (PyCFunction)init_dfk, METH_VARARGS, init_dfk_docs},
@@ -434,6 +487,7 @@ PyMethodDef cdflow_funcs[] = {
     {"add_executor_dfk", (PyCFunction)add_executor_dfk, METH_VARARGS, add_executor_dfk_docs},
     {"shutdown_executor_dfk", (PyCFunction)shutdown_executor_dfk, METH_NOARGS, shutdown_executor_dfk_docs},
     {"submit", (PyCFunction)submit, METH_VARARGS, submit_docs},
+    {"resdep_task", (PyCFunction)resdep_task, METH_VARARGS, resdep_task_docs},
     {NULL}
 };
 
