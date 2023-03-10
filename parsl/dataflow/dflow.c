@@ -97,7 +97,6 @@ unsigned long tablesize; // number of tasks table can store
 unsigned long taskcount; // number of tasks created
 
 int killswitch_thread = 0;
-pthread_mutex_t resdep_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /*
  * In order to invoke object methods we must provide
@@ -138,7 +137,7 @@ static int resize_tasktable(unsigned long numtasks){
     if(!tasktable) // check if task table has been initialized
         return -1;
 
-    if((tasktable = (struct task*)PyMem_RawRealloc(tasktable, numtasks * sizeof(struct task*))) == NULL)
+    if(!PyMem_RawRealloc(tasktable, numtasks * sizeof(struct task*)))
         return -1;
 
     tablesize = numtasks;
@@ -187,8 +186,6 @@ static int create_task(char* exec_label, char* func_name, double time_invoked, i
     task->kwargs = kwargs;
     task->valid = 1;
 
-    Py_INCREF(task->app_fu);
-    Py_INCREF(task->exec_fu);
     Py_INCREF(task->executor);
     Py_INCREF(task->func);
     Py_INCREF(task->args);
@@ -361,17 +358,13 @@ static PyObject* info_task(PyObject* self, PyObject* args){
 }
 
 static PyObject* resdep_task(PyObject* self, PyObject* args){ // resolve dependency
-    pthread_mutex_lock(&resdep_mutex);
     unsigned long task_id, dep_id, depindex;
     struct task* task,* dep;
     if(!PyArg_ParseTuple(args, "k", &task_id)){
-        pthread_mutex_unlock(&resdep_mutex);
         return NULL;
     }
-
     task = get_task(task_id);
     if(!task->depcount){
-        pthread_mutex_unlock(&resdep_mutex);
         return Py_None;
     }
 
@@ -384,7 +377,6 @@ static PyObject* resdep_task(PyObject* self, PyObject* args){ // resolve depende
 
         PyObject* exec_fu = launch(dep->executor, dep->func, dep->args, dep->kwargs);
         if(exec_fu == NULL){
-            pthread_mutex_unlock(&resdep_mutex);
             return NULL;
         }
 
@@ -395,7 +387,6 @@ static PyObject* resdep_task(PyObject* self, PyObject* args){ // resolve depende
         PyObject_CallMethodOneArg(dep->app_fu, pystr_setfut, exec_fu);
         Py_DECREF(done_callback);
     }
-    pthread_mutex_unlock(&resdep_mutex);
     return Py_None;
 }
 
@@ -411,8 +402,9 @@ static PyObject* submit(PyObject* self, PyObject* args){
     struct executor exec;
     PyObject* func = NULL,* fargs=NULL,* fkwargs=NULL,* exec_fu=NULL,* arglist = NULL;
 
-    if(!PyArg_ParseTuple(args, "sdpO|OOO", &func_name, &time_invoked, &join, &func, &fargs, &fkwargs, &arglist))
+    if(!PyArg_ParseTuple(args, "sdpO|OOO", &func_name, &time_invoked, &join, &func, &fargs, &fkwargs, &arglist)){
         return NULL;
+    }
 
     if(join){
         // use the internal executor
@@ -423,8 +415,9 @@ static PyObject* submit(PyObject* self, PyObject* args){
         exec = executors[(rand() % executorcount-1) + 1];
     }
 
-    if((task_id = create_task(exec.label, func_name, time_invoked, join, Py_None, Py_None, exec.obj, func, fargs, fkwargs)) < 0)
+    if((task_id = create_task(exec.label, func_name, time_invoked, join, Py_None, Py_None, exec.obj, func, fargs, fkwargs)) < 0){
         return PyErr_Format(PyExc_RuntimeError, "CDFK failed to create new task and append it to task table");
+    }
     struct task* task = get_task(task_id);
 
     // check for dependencies in args and kwargs
@@ -435,16 +428,11 @@ static PyObject* submit(PyObject* self, PyObject* args){
             continue;
         if(PyObject_IsTrue(PyObject_CallMethodNoArgs(item, pystr_done))){
             // got a dependency that happens to be already done
-            // TODO Figure out someway to replace the value in fargs or fkwargs with the result
-            // Maybe arglist should be a list of tuples where the first element in the tuple is
-            // the position of the arg in fargs or the key in fkwargs and the second element is
-            // the item itself
+            continue;
         }
-        else{
-            PyObject* pylong_tid = PyObject_GetAttr(item, pystr_tid);
-            dep_id = (unsigned long)PyLong_AsLong(pylong_tid);
-            adddep_task(task_id, dep_id);
-        }
+        PyObject* pylong_tid = PyObject_GetAttr(item, pystr_tid);
+        dep_id = (unsigned long)PyLong_AsLong(pylong_tid);
+        adddep_task(task_id, dep_id);
         chstatus_task(task_id, pending);
     }
 
@@ -452,6 +440,7 @@ static PyObject* submit(PyObject* self, PyObject* args){
     if(getstatus_task(task_id) == pending){
         PyObject* appfu_arglist = Py_BuildValue("Oi", Py_None, task_id);
         PyObject* app_fu = PyObject_CallObject(pytyp_appfut, appfu_arglist);
+        Py_INCREF(app_fu);
         Py_DECREF(appfu_arglist);
         task->app_fu = app_fu;
         return app_fu;
@@ -459,12 +448,13 @@ static PyObject* submit(PyObject* self, PyObject* args){
     else{
         // invoke executor submit function
         exec_fu = launch(exec.obj, func, fargs, fkwargs);
-        if(exec_fu == NULL)
+        if(exec_fu == NULL){
             return NULL;
-
+        }
         chstatus_task(task_id, launched);
         PyObject* appfu_arglist = Py_BuildValue("Oi", exec_fu, task_id);
         PyObject* app_fu = PyObject_CallObject(pytyp_appfut, appfu_arglist);
+        Py_INCREF(app_fu);
         PyObject* done_callback = PyObject_GetAttr(app_fu, pystr_update);
         PyObject_CallMethodOneArg(exec_fu, pystr_adc, done_callback);
         Py_DECREF(appfu_arglist);
