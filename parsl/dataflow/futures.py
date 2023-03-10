@@ -83,6 +83,12 @@ class AppFuture(Future):
     def setfut(self, exec_fu: Future):
         self.exec_fu = exec_fu
 
+    def execfu_done(self):
+        if self._exec_fu:
+            return self._tid, self._exec_fu.done()
+        else:
+            return self._tid, None
+
     @property
     def stdout(self) -> Optional[str]:
         raise NotImplementedError("Stdout not implemented")
