@@ -106,7 +106,7 @@ int killswitch_thread = 0;
  * initialization phase. Likely need to decrement ref
  * counter in destroy dfk phase
  */
-PyInterpreterState* pyinterp_state = NULL;
+// PyInterpreterState* pyinterp_state = NULL; // requires python version >= 3.9
 PyObject* pystr_submit = NULL;
 PyObject* pystr_shutdown = NULL;
 PyObject* pystr_tid = NULL;
@@ -262,7 +262,7 @@ static PyObject* init_dfk(PyObject* self, PyObject* args){
 
     if(init_tasktable(numtasks) < 0)
         return PyErr_Format(PyExc_RuntimeError, "CDFK failed to initialize task table");
-    pyinterp_state = PyInterpreterState_Get();
+    // pyinterp_state = PyInterpreterState_Get(); // requires python version >= 3.9
     pystr_submit = Py_BuildValue("s", "submit");
     pystr_shutdown = Py_BuildValue("s", "shutdown");
     pystr_tid = Py_BuildValue("s", "tid");
@@ -382,9 +382,10 @@ static PyObject* resdep_task(PyObject* self, PyObject* args){ // resolve depende
 
         chstatus_task(dep_id, launched);
         PyObject* done_callback = PyObject_GetAttr(dep->app_fu, pystr_update);
-        PyObject_CallMethodOneArg(exec_fu, pystr_adc, done_callback);
+        PyObject_CallMethodObjArgs(exec_fu, pystr_adc, done_callback, NULL); // Could be replaced with PyObject_CallMethodOneArg but need python >= 3.9
         dep->exec_fu = exec_fu;
-        PyObject_CallMethodOneArg(dep->app_fu, pystr_setfut, exec_fu);
+        PyObject_CallMethodObjArgs(dep->app_fu, pystr_setfut, exec_fu, NULL); // Could be replaced with PyObject_CallMethodOneArg but need python >= 3.9
+
         Py_DECREF(done_callback);
     }
     return Py_None;
@@ -426,7 +427,7 @@ static PyObject* submit(PyObject* self, PyObject* args){
         PyObject* item = PyList_GetItem(arglist, i);
         if(!PyObject_IsInstance(item, pytyp_appfut))
             continue;
-        if(PyObject_IsTrue(PyObject_CallMethodNoArgs(item, pystr_done))){
+        if(PyObject_IsTrue(PyObject_CallMethodObjArgs(item, pystr_done, NULL))){ // PyObject_CallMethodNoArgs requires python >= 3.9
             // got a dependency that happens to be already done
             continue;
         }
@@ -456,7 +457,7 @@ static PyObject* submit(PyObject* self, PyObject* args){
         PyObject* app_fu = PyObject_CallObject(pytyp_appfut, appfu_arglist);
         Py_INCREF(app_fu);
         PyObject* done_callback = PyObject_GetAttr(app_fu, pystr_update);
-        PyObject_CallMethodOneArg(exec_fu, pystr_adc, done_callback);
+        PyObject_CallMethodObjArgs(exec_fu, pystr_adc, done_callback, NULL); // Could be replaced with PyObject_CallMethodOneArg but need python >= 3.9
         Py_DECREF(appfu_arglist);
         Py_DECREF(done_callback); // TODO Does this need to be here? -> Does PyObject_GetAttr increment refernce counter?
         task->exec_fu = exec_fu;
