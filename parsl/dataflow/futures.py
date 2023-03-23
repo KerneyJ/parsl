@@ -95,7 +95,7 @@ class AppFuture(Future):
 
     @property
     def args(self):
-        return cdflow.getargs_task(self._tid)
+        return list(cdflow.getargs_task(self._tid))
 
     @property
     def kwargs(self):
