@@ -90,6 +90,18 @@ class AppFuture(Future):
             return self._tid, None
 
     @property
+    def func(self):
+        return cdflow.getfunc_task(self._tid)
+
+    @property
+    def args(self):
+        return cdflow.getargs_task(self._tid)
+
+    @property
+    def kwargs(self):
+        return cdflow.getkwargs_task(self._tid)
+
+    @property
     def stdout(self) -> Optional[str]:
         raise NotImplementedError("Stdout not implemented")
 

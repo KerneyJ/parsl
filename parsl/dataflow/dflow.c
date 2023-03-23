@@ -86,6 +86,9 @@ static PyObject* info_exec_dfk(PyObject*);
 static PyObject* add_executor_dfk(PyObject*, PyObject*);
 static PyObject* shutdown_executor_dfk(PyObject*);
 static PyObject* info_task(PyObject*, PyObject*);
+static PyObject* getfunc_task(PyObject*, PyObject*);
+static PyObject* getargs_task(PyObject*, PyObject*);
+static PyObject* getkwargs_task(PyObject*, PyObject*);
 static PyObject* resdep_task(PyObject*, PyObject*); // resolve dependency
 static PyObject* submit(PyObject*, PyObject*);
 static PyObject* launch(PyObject*, PyObject*, PyObject*, PyObject*);
@@ -357,6 +360,42 @@ static PyObject* info_task(PyObject* self, PyObject* args){
                                 task->id, task->status, task->depcount, task->exec_label, task->func_name, (int)task->time_invoked, task->join);
 }
 
+static PyObject* getfunc_task(PyObject* self, PyObject* args){
+    unsigned long task_id;
+
+    if(!PyArg_ParseTuple(args, "k", &task_id))
+        return NULL;
+
+    struct task* task = get_task(task_id);
+    if(!task->valid)
+        return PyErr_Format(PyExc_RuntimeError, "Invalid task");
+    return task->func;
+}
+
+static PyObject* getargs_task(PyObject* self, PyObject* args){
+    unsigned long task_id;
+
+    if(!PyArg_ParseTuple(args, "k", &task_id))
+        return NULL;
+
+    struct task* task = get_task(task_id);
+    if(!task->valid)
+        return PyErr_Format(PyExc_RuntimeError, "Invalid task");
+    return task->args;
+}
+
+static PyObject* getkwargs_task(PyObject* self, PyObject* args){
+    unsigned long task_id;
+
+    if(!PyArg_ParseTuple(args, "k", &task_id))
+        return NULL;
+
+    struct task* task = get_task(task_id);
+    if(!task->valid)
+        return PyErr_Format(PyExc_RuntimeError, "Invalid task");
+    return task->kwargs;
+}
+
 static PyObject* resdep_task(PyObject* self, PyObject* args){ // resolve dependency
     unsigned long task_id, dep_id, depindex;
     struct task* task,* dep;
@@ -483,6 +522,9 @@ char add_executor_dfk_docs[] = "This method appends a new executor to the execut
 char shutdown_executor_dfk_docs[] = "Loops through all the executor PyObjects stored in executors array and invokes their shutdown function";
 char submit_docs[] = "Takes in a function and its arguments, creates a task in the dag, and invokes executor.submit";
 char info_task_docs[] = "takes as input an id as an int and returns information about a the task with that id";
+char getfunc_task_docs[] = "Returns the task's function python object";
+char getargs_task_docs[] = "Returns the task's args python object";
+char getkwargs_task_docs[] = "Returns the task's keyword args python object";
 char resdep_task_docs[] = "Takes in a task id and decrements the depcount of all the task dependent on it";
 
 PyMethodDef cdflow_funcs[] = {
@@ -491,6 +533,9 @@ PyMethodDef cdflow_funcs[] = {
     {"info_dfk", (PyCFunction)info_dfk, METH_NOARGS, info_dfk_docs},
     {"info_exec_dfk", (PyCFunction)info_exec_dfk, METH_NOARGS, info_exec_dfk_docs},
     {"info_task", (PyCFunction)info_task, METH_VARARGS, info_task_docs},
+    {"getfunc_task", (PyCFunction)getfunc_task, METH_VARARGS, getfunc_task_docs},
+    {"getargs_task", (PyCFunction)getargs_task, METH_VARARGS, getargs_task_docs},
+    {"getkwargs_task", (PyCFunction)getkwargs_task, METH_VARARGS, getkwargs_task_docs},
     {"add_executor_dfk", (PyCFunction)add_executor_dfk, METH_VARARGS, add_executor_dfk_docs},
     {"shutdown_executor_dfk", (PyCFunction)shutdown_executor_dfk, METH_NOARGS, shutdown_executor_dfk_docs},
     {"submit", (PyCFunction)submit, METH_VARARGS, submit_docs},
