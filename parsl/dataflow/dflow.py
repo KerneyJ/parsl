@@ -78,7 +78,7 @@ class DataFlowKernel(object):
         """
 
         # this will be used to check cleanup only happens once
-        cdflow.init_dfk(100000, AppFuture, self._unwrap_futures, self.execsubmit_wrapper) # Allocate an initial task table size of 100,000
+        cdflow.init_dfk(32000, AppFuture, self._unwrap_futures, self.execsubmit_wrapper) # Allocate an initial task table size of 100,000
         self.cleanup_called = False
 
         self._config = config
