@@ -128,8 +128,7 @@ static int init_tasktable(unsigned long numtasks){
     tablesize = numtasks;
     taskcount = 0;
     // set all of the valid flags to 0
-    for(unsigned long i; i < numtasks; i++)
-        tasktable[i].valid = 0;
+    memset(tasktable, 0, sizeof(struct task) * numtasks);
     return 0;
 }
 
@@ -140,8 +139,8 @@ static int resize_tasktable(unsigned long numtasks){
     if(!tasktable) // check if task table has been initialized
         return -1;
 
-    if(!PyMem_RawRealloc(tasktable, numtasks * sizeof(struct task*)))
-        return -1;
+    if(!(tasktable = PyMem_RawRealloc(tasktable, numtasks * sizeof(struct task*))))
+        return -1; // FIXME realloc fails
 
     tablesize = numtasks;
     return 0;
