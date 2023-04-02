@@ -16,7 +16,6 @@
 #include <pthread.h>
 #include <signal.h>
 
-#define TABLE_INC 10000
 #define DEPTAB_INC 10
 #define EXEC_COUNT 10
 
@@ -58,6 +57,8 @@ struct task{
     PyObject* func;
     PyObject* args;
     PyObject* kwargs;
+
+    struct task* next;
 };
 
 struct executor{
@@ -65,13 +66,16 @@ struct executor{
     char* label;
 };
 
-static int init_tasktable(unsigned long); // allocate initial amont of memory for table
-static int resize_tasktable(unsigned long); // change amount of memory in table
-static int increment_tasktable(void); // will try to increase table size by TABLE_INC
+unsigned long inline hash(unsigned long);
+
+static int init_tasktable(unsigned long, unsigned long); // allocate initial amont of memory for table
+static int dest_tasktable(void);
+static int increment_tasktable(unsigned long, unsigned long);
+static struct task* insert_tasktable(unsigned long);
 
 static int create_task(char*, char*, double, int, PyObject*, PyObject*, PyObject*, PyObject*, PyObject*, PyObject*); // add a task to the dfk
 static int delete_task(unsigned long);
-static inline struct task* get_task(unsigned long);
+static struct task* get_task(unsigned long);
 static int adddep_task(unsigned long, unsigned long);
 static int chstatus_task(unsigned long, enum state);
 static enum state getstatus_task(unsigned long);
@@ -96,7 +100,8 @@ static PyObject* launch(PyObject*, PyObject*, PyObject*, PyObject*);
 struct task* tasktable = NULL; // dag represented as table of task structs
 struct executor executors[EXEC_COUNT]; // Array of executor structs that store the label, 10 executor cap right now
 unsigned int executorcount= 0;
-unsigned long tablesize; // number of tasks table can store
+unsigned long tablesize; // number of buckets in hashtable
+unsigned long tableinc;
 unsigned long taskcount; // number of tasks created
 
 int killswitch_thread = 0;
@@ -121,35 +126,53 @@ PyObject* pytyp_appfut = NULL;
 PyObject* pyfun_unwrapfut = NULL;
 PyObject* pyfun_execsubwrapper = NULL;
 
-static int init_tasktable(unsigned long numtasks){
+unsigned long inline hash(unsigned long key){
+    return key % tablesize;
+}
+
+static int init_tasktable(unsigned long numtasks, unsigned long tblinc){
     tasktable = (struct task*)PyMem_RawMalloc(sizeof(struct task) * numtasks);
     if(tasktable == NULL)
         return -1;
     tablesize = numtasks;
+    tableinc = tblinc;
     taskcount = 0;
     // set all of the valid flags to 0
     memset(tasktable, 0, sizeof(struct task) * numtasks);
     return 0;
 }
 
-static int resize_tasktable(unsigned long numtasks){
-    if(numtasks > ULONG_MAX) // check if size is too big
+static int dest_tasktable(void){ // TODO implement
+    if(tasktable == NULL);
         return -1;
-
-    if(!tasktable) // check if task table has been initialized
-        return -1;
-
-    if(!(tasktable = PyMem_RawRealloc(tasktable, numtasks * sizeof(struct task*))))
-        return -1; // FIXME realloc fails
-
-    tablesize = numtasks;
     return 0;
 }
 
-static int increment_tasktable(){
-    if(tablesize + TABLE_INC > ULONG_MAX)
-        return -1;
-    return resize_tasktable(tablesize + TABLE_INC);
+static int increment_tasktable(unsigned long index, unsigned long depth){
+    struct task* layer = (struct task*)PyMem_RawMalloc(sizeof(struct task) * tableinc);
+    memset(layer, 0, sizeof(struct task) * tableinc);
+    struct task* node = &tasktable[index - (index % tableinc)];
+    for(unsigned long i = 0; i < depth; i++) node = node->next;
+    for(unsigned long i = 0; i < tableinc; i++)
+        (node+i)->next = (layer+1);
+    return 0;
+}
+
+static struct task* insert_tasktable(unsigned long task_id){
+    unsigned long index = hash(task_id), depth = 0;
+    struct task* node = &tasktable[index];
+    while(node){
+        if(!node->valid)
+            return node;
+        if(node->next){
+            node = node->next;
+            depth++;
+            continue;
+        }
+        increment_tasktable(index, depth);
+        node = node->next;
+    }
+    return NULL;
 }
 
 /*
@@ -161,12 +184,7 @@ static int increment_tasktable(){
  * Returns the id of the task it created TODO, should be an unsigned long
  */
 static int create_task(char* exec_label, char* func_name, double time_invoked, int join, PyObject* app_fu, PyObject* exec_fu, PyObject* executor, PyObject* func, PyObject* args, PyObject* kwargs){
-    // check if the table is large enough
-    if(taskcount == tablesize)
-        if(increment_tasktable() < 0)
-            return -1;
-
-    struct task* task = get_task(taskcount);
+    struct task* task = insert_tasktable(taskcount);
     task->id = taskcount;
     taskcount++;
     task->status = unsched;
@@ -216,8 +234,15 @@ static int delete_task(unsigned long task_id){
     return 0;
 }
 
-static inline struct task* get_task(unsigned long task_id){
-    return &tasktable[task_id];
+static struct task* get_task(unsigned long task_id){
+    unsigned long index = hash(task_id);
+    struct task* node = &tasktable[index];
+    while(node){
+        if(node->id == task_id)
+            return node;
+        node = node->next;
+    }
+    return NULL;
 }
 
 static int adddep_task(unsigned long task_id, unsigned long dep_id){
@@ -258,11 +283,11 @@ static int dest_threads(void){
 }
 
 static PyObject* init_dfk(PyObject* self, PyObject* args){
-    unsigned long numtasks;
-    if(!PyArg_ParseTuple(args, "kOOO", &numtasks, &pytyp_appfut, &pyfun_unwrapfut, &pyfun_execsubwrapper))
+    unsigned long numtasks, tblinc;
+    if(!PyArg_ParseTuple(args, "kkOOO", &numtasks, &tblinc, &pytyp_appfut, &pyfun_unwrapfut, &pyfun_execsubwrapper))
         return NULL;
 
-    if(init_tasktable(numtasks) < 0)
+    if(init_tasktable(numtasks, tblinc) < 0)
         return PyErr_Format(PyExc_RuntimeError, "CDFK failed to initialize task table");
     // pyinterp_state = PyInterpreterState_Get(); // requires python version >= 3.9
     pystr_submit = Py_BuildValue("s", "submit");
@@ -288,12 +313,7 @@ static PyObject* init_dfk(PyObject* self, PyObject* args){
 static PyObject* dest_dfk(PyObject* self){
     if(dest_threads() < 0)
         ; // TODO Find something to do when attempt to shutdown threads fails
-    if(tasktable != NULL){
-        for(unsigned long index = 0; index < tablesize; index++){
-            delete_task(index);
-        }
-        PyMem_RawFree(tasktable);
-    }
+    dest_tasktable();
     tablesize = 0;
     taskcount = 0;
 
