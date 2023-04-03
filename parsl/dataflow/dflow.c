@@ -94,6 +94,7 @@ static PyObject* getfunc_task(PyObject*, PyObject*);
 static PyObject* getargs_task(PyObject*, PyObject*);
 static PyObject* getkwargs_task(PyObject*, PyObject*);
 static PyObject* resdep_task(PyObject*, PyObject*); // resolve dependency
+static PyObject* markdone_task(PyObject*, PyObject*); // mark done
 static PyObject* submit(PyObject*, PyObject*);
 static PyObject* launch(PyObject*, PyObject*, PyObject*, PyObject*);
 
@@ -448,6 +449,14 @@ static PyObject* resdep_task(PyObject* self, PyObject* args){ // resolve depende
     return Py_None;
 }
 
+static PyObject* markdone_task(PyObject* self, PyObject* args){
+    unsigned long task_id;
+    if(!PyArg_ParseTuple(args, "k", &task_id))
+        return NULL;
+    chstatus_task(task_id, exec_done);
+    return Py_None;
+}
+
 /*
  * TODO When freeing a task will need to decrement the refernce counts
  * of the python objects taken as a argument
@@ -539,6 +548,7 @@ char info_dfk_docs[] = "This method prints the global state associated with the 
 char info_exec_dfk_docs[] = "Loops through all the executor PyObjects stored in executors array and prints them";
 char add_executor_dfk_docs[] = "This method appends a new executor to the executor table";
 char shutdown_executor_dfk_docs[] = "Loops through all the executor PyObjects stored in executors array and invokes their shutdown function";
+char markdone_task_docs[] = "Marks a task a done within cdfk";
 char submit_docs[] = "Takes in a function and its arguments, creates a task in the dag, and invokes executor.submit";
 char info_task_docs[] = "takes as input an id as an int and returns information about a the task with that id";
 char getfunc_task_docs[] = "Returns the task's function python object";
@@ -557,6 +567,7 @@ PyMethodDef cdflow_funcs[] = {
     {"getkwargs_task", (PyCFunction)getkwargs_task, METH_VARARGS, getkwargs_task_docs},
     {"add_executor_dfk", (PyCFunction)add_executor_dfk, METH_VARARGS, add_executor_dfk_docs},
     {"shutdown_executor_dfk", (PyCFunction)shutdown_executor_dfk, METH_NOARGS, shutdown_executor_dfk_docs},
+    {"markdone_task", (PyCFunction)markdone_task, METH_VARARGS, markdone_task_docs},
     {"submit", (PyCFunction)submit, METH_VARARGS, submit_docs},
     {"resdep_task", (PyCFunction)resdep_task, METH_VARARGS, resdep_task_docs},
     {NULL}
