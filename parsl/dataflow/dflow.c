@@ -154,7 +154,7 @@ static int increment_tasktable(unsigned long index, unsigned long depth){
     struct task* node = &tasktable[index - (index % tableinc)];
     for(unsigned long i = 0; i < depth; i++) node = node->next;
     for(unsigned long i = 0; i < tableinc; i++)
-        (node+i)->next = (layer+1);
+        (node+i)->next = (layer+i);
     return 0;
 }
 
@@ -210,7 +210,6 @@ static int create_task(char* exec_label, char* func_name, double time_invoked, i
     Py_INCREF(task->func);
     Py_INCREF(task->args);
     Py_INCREF(task->kwargs);
-
     return task->id;
 }
 
