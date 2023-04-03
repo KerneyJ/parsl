@@ -74,7 +74,7 @@ static int increment_tasktable(unsigned long, unsigned long);
 static struct task* insert_tasktable(unsigned long);
 
 static int create_task(char*, char*, double, int, PyObject*, PyObject*, PyObject*, PyObject*, PyObject*, PyObject*); // add a task to the dfk
-static int delete_task(unsigned long);
+static int delete_task(unsigned long, unsigned long);
 static struct task* get_task(unsigned long);
 static int adddep_task(unsigned long, unsigned long);
 static int chstatus_task(unsigned long, enum state);
@@ -144,7 +144,7 @@ static int init_tasktable(unsigned long numtasks, unsigned long tblinc){
 }
 
 static int dest_tasktable(void){ // TODO implement
-    if(tasktable == NULL);
+    if(tasktable == NULL)
         return -1;
     return 0;
 }
@@ -165,6 +165,10 @@ static struct task* insert_tasktable(unsigned long task_id){
     while(node){
         if(!node->valid)
             return node;
+        if(node->status == exec_done){
+            // delete_task(index, depth);
+            // return node;
+        }
         if(node->next){
             node = node->next;
             depth++;
@@ -214,23 +218,25 @@ static int create_task(char* exec_label, char* func_name, double time_invoked, i
     return task->id;
 }
 
-static int delete_task(unsigned long task_id){
-    struct task* task = get_task(task_id);
-    if(!task->valid)
+static int delete_task(unsigned long index, unsigned long depth){
+    struct task* node = &tasktable[index];
+    for(unsigned long i = 0; i < depth; i++)
+        node = node->next;
+    if(!node->valid)
         return -1; // task does not exist or has already been deleted
-    if(task->depends){
-        PyMem_RawFree(task->depends);
+    if(node->depends){
+        PyMem_RawFree(node->depends);
     }
 
     // FIXME gotta figure out which of these is being deleted before hand, one of these is causing the garbage collector to segfault
-    //Py_DECREF(task->app_fu);
-    //Py_DECREF(task->exec_fu);
-    //Py_DECREF(task->executor);
-    //Py_DECREF(task->func);
-    //Py_DECREF(task->args);
-    //Py_DECREF(task->kwargs);
+    Py_DECREF(node->app_fu);
+    Py_DECREF(node->exec_fu);
+    Py_DECREF(node->executor);
+    Py_DECREF(node->func);
+    Py_DECREF(node->args);
+    Py_DECREF(node->kwargs);
 
-    task->valid = 0;
+    node->valid = 0;
     return 0;
 }
 
