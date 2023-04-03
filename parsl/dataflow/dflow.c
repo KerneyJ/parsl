@@ -104,6 +104,7 @@ unsigned int executorcount= 0;
 unsigned long tablesize; // number of buckets in hashtable
 unsigned long tableinc;
 unsigned long taskcount; // number of tasks created
+unsigned long malloccount = 0; // for debug purposes
 
 int killswitch_thread = 0;
 
@@ -133,6 +134,7 @@ unsigned long inline hash(unsigned long key){
 
 static int init_tasktable(unsigned long numtasks, unsigned long tblinc){
     tasktable = (struct task*)PyMem_RawMalloc(sizeof(struct task) * numtasks);
+    malloccount++;
     if(tasktable == NULL)
         return -1;
     tablesize = numtasks;
@@ -151,6 +153,7 @@ static int dest_tasktable(void){ // TODO implement
 
 static int increment_tasktable(unsigned long index, unsigned long depth){
     struct task* layer = (struct task*)PyMem_RawMalloc(sizeof(struct task) * tableinc);
+    malloccount++;
     memset(layer, 0, sizeof(struct task) * tableinc);
     struct task* node = &tasktable[index - (index % tableinc)];
     for(unsigned long i = 0; i < depth; i++) node = node->next;
@@ -166,8 +169,8 @@ static struct task* insert_tasktable(unsigned long task_id){
         if(!node->valid)
             return node;
         if(node->status == exec_done){
-            // delete_task(index, depth);
-            // return node;
+            //delete_task(index, depth);
+            //return node;
         }
         if(node->next){
             node = node->next;
@@ -330,6 +333,9 @@ static PyObject* dest_dfk(PyObject* self){
     Py_XDECREF(pystr_done);
     Py_XDECREF(pystr_adc);
     Py_XDECREF(pystr_setfut);
+
+    printf("Malloc count %lu\n", malloccount);
+    fflush(0);
 
     return Py_None;
 }
