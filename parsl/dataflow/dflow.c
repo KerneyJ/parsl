@@ -169,8 +169,8 @@ static struct task* insert_tasktable(unsigned long task_id){
         if(!node->valid)
             return node;
         if(node->status == exec_done){
-            //delete_task(index, depth);
-            //return node;
+            delete_task(index, depth);
+            return node;
         }
         if(node->next){
             node = node->next;
@@ -232,8 +232,8 @@ static int delete_task(unsigned long index, unsigned long depth){
     }
 
     // FIXME gotta figure out which of these is being deleted before hand, one of these is causing the garbage collector to segfault
-    Py_DECREF(node->app_fu);
-    Py_DECREF(node->exec_fu);
+    //Py_DECREF(node->app_fu);
+    //Py_DECREF(node->exec_fu);
     Py_DECREF(node->executor);
     Py_DECREF(node->func);
     Py_DECREF(node->args);
