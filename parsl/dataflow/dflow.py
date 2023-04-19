@@ -72,6 +72,7 @@ class DataFlowKernel(object):
         """
 
         # this will be used to check cleanup only happens once
+        logging.disable()
         self.cleanup_called = False
 
         if isinstance(config, dict):
@@ -809,6 +810,7 @@ class DataFlowKernel(object):
         return new_args, kwargs, dep_failures
 
     def submit(self, func, app_args, executors='all', cache=False, ignore_for_cache=None, app_kwargs={}, join=False):
+        subtime = time.time()
         """Add task to the dataflow system.
 
         If the app task has the executors attributes not set (default=='all')
@@ -890,7 +892,7 @@ class DataFlowKernel(object):
                     'time_returned': None,
                     'try_time_launched': None,
                     'try_time_returned': None,
-                    'resource_specification': resource_specification}
+                    'resource_specification': subtime}
 
         self.update_task_state(task_def, States.unsched)
 

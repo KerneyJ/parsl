@@ -201,6 +201,7 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
                  worker_logdir_root: Optional[str] = None,
                  block_error_handler: bool = True):
 
+        logging.disable()
         logger.debug("Initializing HighThroughputExecutor")
 
         BlockProviderExecutor.__init__(self, provider=provider, block_error_handler=block_error_handler)
@@ -260,6 +261,7 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
         self.cpu_affinity = cpu_affinity
 
         # The below variables are for task tagging
+        self.su = 0.0
         self.ex = 0.0
 
         self.ei = 0.0
@@ -439,6 +441,7 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
 
                                 task_fut.set_result(result)
                                 # Calculate time spent in each section
+                                self.su += msg['exc_time'] - msg['dfk_time'] # time in dfk
                                 self.ex += msg['s_exc->int'] - msg['exc_time']   # executor
                                 self.ei += msg['r_exc->int'] - msg['s_exc->int'] # executor to interchange
                                 self.it += msg['s_int->man'] - msg['r_exc->int'] # total interchange
@@ -573,7 +576,7 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
                 logger.debug("[HOLD_BLOCK]: Sending hold to manager: {}".format(manager['manager']))
                 self.hold_worker(manager['manager'])
 
-    def submit(self, func, resource_specification, *args, **kwargs):
+    def submit(self, func, subtime, *args, **kwargs):
         """Submits work to the the outgoing_q.
 
         The outgoing_q is an external process listens on this
@@ -591,11 +594,11 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
               Future
         """
         exc_time = time.time() # the timestamp when we have entered the executor
-        if resource_specification:
-            logger.error("Ignoring the resource specification. "
-                         "Parsl resource specification is not supported in HighThroughput Executor. "
-                         "Please check WorkQueueExecutor if resource specification is needed.")
-            raise UnsupportedFeatureError('resource specification', 'HighThroughput Executor', 'WorkQueue Executor')
+        #if resource_specification:
+        #    logger.error("Ignoring the resource specification. "
+        #                 "Parsl resource specification is not supported in HighThroughput Executor. "
+        #                 "Please check WorkQueueExecutor if resource specification is needed.")
+        #    raise UnsupportedFeatureError('resource specification', 'HighThroughput Executor', 'WorkQueue Executor')
 
         if self.bad_state_is_set:
             raise self.executor_exception
@@ -621,6 +624,7 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
 
         msg = {"task_id": task_id,
                "buffer": fn_buf,
+               "dfk_time": subtime,
                "exc_time": exc_time,
                "s_exc->int": time.time()}
 
@@ -751,7 +755,8 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
         logger.info("Finished HighThroughputExecutor shutdown attempt")
 
         # log the tagging results
-        logger.info(f"Average amount of time task spent in each section(total task {self.rc})\n" \
+        print(f"Average amount of time task spent in each section(total task {self.rc})\n" \
+                    f"dfk: {self.su / self.rc}\n"\
                     f"executor: {self.ex / self.rc}\n" \
                     f"executor -> interchange: {self.ei / self.rc}\n" \
                     f"Total Interchange: {self.it / self.rc}\n" \

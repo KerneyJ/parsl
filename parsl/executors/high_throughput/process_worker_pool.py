@@ -579,6 +579,7 @@ def worker(worker_id, pool_id, pool_size, task_queue, result_queue, worker_queue
             result_package = {'type': 'result', 'task_id': tid, 'exception': serialize(RemoteExceptionWrapper(*sys.exc_info()))}
         else:
             result_package = {'type': 'result', 'task_id': tid, 'result': serialized_result,
+                              'dfk_time': req['dfk_time'],
                               'exc_time': req['exc_time'], 
                               'r_exc->int': req['r_exc->int'],  's_exc->int': req['s_exc->int'],
                               'g_int->int': req['g_int->int'],  'p_int->int': req['p_int->int'],
