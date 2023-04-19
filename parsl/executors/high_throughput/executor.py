@@ -209,7 +209,7 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
                  worker_logdir_root: Optional[str] = None,
                  block_error_handler: bool = True):
 
-        logging.setLevel(logging.CRITICAL)
+        logger.setLevel(logging.CRITICAL)
         logger.debug("Initializing HighThroughputExecutor")
 
         BlockProviderExecutor.__init__(self, provider=provider, block_error_handler=block_error_handler)

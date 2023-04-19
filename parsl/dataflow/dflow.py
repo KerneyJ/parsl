@@ -83,7 +83,7 @@ class DataFlowKernel(object):
 
         self._config = config
         self.run_dir = make_rundir(config.run_dir)
-
+        logger.setLevel(logging.CRITICAL)
         if config.initialize_logging:
             parsl.set_file_logger("{}/parsl.log".format(self.run_dir), level=logging.DEBUG)
 
