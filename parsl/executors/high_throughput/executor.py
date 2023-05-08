@@ -199,7 +199,7 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
                  address_probe_timeout: Optional[int] = None,
                  managed: bool = True,
                  worker_logdir_root: Optional[str] = None):
-
+        logging.disable()
         logger.debug("Initializing HighThroughputExecutor")
 
         BlockProviderExecutor.__init__(self, provider)

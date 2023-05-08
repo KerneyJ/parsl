@@ -69,6 +69,7 @@ class DataFlowKernel(object):
         """
 
         # this will be used to check cleanup only happens once
+        logging.disable()
         self.cleanup_called = False
 
         if isinstance(config, dict):
