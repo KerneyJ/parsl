@@ -833,7 +833,7 @@ class DataFlowKernel(object):
                (AppFuture) [DataFutures,]
 
         """
-
+        logger.info(f"submit args -> func: {func}; app_args: {app_args}; executors: {executors}; cache: {cache}; ignore_for_cache: {ignore_for_cache}; app_kwargs: {app_kwargs}; join: {join}")
         if ignore_for_cache is None:
             ignore_for_cache = []
 
@@ -964,7 +964,7 @@ class DataFlowKernel(object):
                 logger.error("add_done_callback got an exception {} which will be ignored".format(e))
 
         self.launch_if_ready(task_def)
-
+        logger.info(f"Task record: {task_def}")
         return app_fu
 
     # it might also be interesting to assert that all DFK
