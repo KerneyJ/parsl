@@ -768,3 +768,5 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
                     f"manager -> worker: {self.mw / self.rc}\n" \
                     f"worker: {self.wr / self.rc}\n" \
                 )
+        print(f"[{self.su / self.rc}, {self.ex / self.rc}, {self.ei / self.rc}, {self.it / self.rc}, {self.im / self.rc}, {self.mn / self.rc}, {self.mw / self.rc}, {self.wr / self.rc}]")
+        print(f"[{self.tp / self.rc}, {self.tm / self.rc}, {self.mt / self.rc}]")
