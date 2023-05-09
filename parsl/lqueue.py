@@ -21,8 +21,8 @@ class _SharedMemory(object):
 # if there is trouble with parsl then do microbenchmark
 class LocklessQueue(object):
 
-    _MAX_ITEM_SIZE = 10000 # items should be <= 10KB
-    _HEADER_SIZE = 16 # 1 byte for occupied or not 15 bytes for length
+    _MAX_ITEM_SIZE = 10000 # items should be <= 1.6
+    _HEADER_SIZE = 4 # 1 byte for occupied or not 3 bytes for length
     _BLOCK_SIZE = _MAX_ITEM_SIZE + _HEADER_SIZE
     _BYTES_ORDER = "little" # for the size integer
     
@@ -60,8 +60,8 @@ class LocklessQueue(object):
         if len(b) > LocklessQueue._MAX_ITEM_SIZE: # item too big
             raise BufferError("Item is too big for queue") 
 
-        self._buffer[self._wptr+1:self._wptr+16] = len(b).to_bytes(15, LocklessQueue._BYTES_ORDER)
-        self._buffer[self._wptr+17:self._wptr+17+len(b)] = bytearray(b) 
+        self._buffer[self._wptr+1:self._wptr+4] = len(b).to_bytes(3, LocklessQueue._BYTES_ORDER)
+        self._buffer[self._wptr+5:self._wptr+5+len(b)] = bytearray(b) 
         self._buffer[self._wptr] = 255
         if self._wptr == (self._maxsize - 1) * LocklessQueue._BLOCK_SIZE:
             self._wptr = 0
