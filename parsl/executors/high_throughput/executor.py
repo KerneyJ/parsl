@@ -721,7 +721,7 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
         self.interchange_proc.terminate()
         logger.info("Finished HighThroughputExecutor shutdown attempt")
         for w in self.workers:
-            w.terminate()
+            w.kill()
 
         logger.info("Workers shutdown")
 
@@ -762,6 +762,9 @@ def worker(worker_id, logdir, task_queue, result_queue):
     Pop request from queue
     Put result into result_queue
     """
+    import cProfile
+    pr = cProfile.Profile()
+    pr.enable()
 
     # override the global logger inherited from zthe __main__ process (which
     # usually logs to manager.log) with one specific to this worker.
@@ -803,6 +806,10 @@ def worker(worker_id, logdir, task_queue, result_queue):
                                         'exception': serialize(RemoteExceptionWrapper(*sys.exc_info()))
             })
 
+        if tid == 10000:
+            logger.info("printed all tasks")
+            pr.disable()
+            pr.dump_stats(f"{logdir}worker_{worker_id}.pstats")
         result_queue.put(pkl_package)
         wlogger.info("All processing finished for task {}".format(tid))
 
