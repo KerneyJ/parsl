@@ -12,6 +12,7 @@ import threading
 import sys
 import datetime
 from getpass import getuser
+from typeguard import typechecked
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from uuid import uuid4
 from socket import gethostname
@@ -31,10 +32,13 @@ from parsl.dataflow.memoization import Memoizer
 from parsl.dataflow.rundirs import make_rundir
 from parsl.dataflow.states import States, FINAL_STATES, FINAL_FAILURE_STATES
 from parsl.dataflow.taskrecord import TaskRecord
-from parsl.dataflow.usage_tracking.usage import UsageTracker
+from parsl.usage_tracking.usage import UsageTracker
+from parsl.executors.base import ParslExecutor
+from parsl.executors.status_handling import BlockProviderExecutor
 from parsl.executors.threads import ThreadPoolExecutor
+from parsl.monitoring import MonitoringHub
 from parsl.process_loggers import wrap_with_logs
-from parsl.providers.provider_base import JobStatus, JobState
+from parsl.providers.base import JobStatus, JobState
 from parsl.utils import get_version, get_std_fname_mode, get_all_checkpoints
 
 from parsl.monitoring.message_type import MessageType
@@ -61,7 +65,8 @@ class DataFlowKernel(object):
 
     """
 
-    def __init__(self, config=Config()):
+    @typechecked
+    def __init__(self, config: Config = Config()) -> None:
         """Initialize the DataFlowKernel.
 
         Parameters
@@ -75,17 +80,13 @@ class DataFlowKernel(object):
         logging.disable()
         self.cleanup_called = False
 
-        if isinstance(config, dict):
-            raise ConfigurationError(
-                    'Expected `Config` class, received dictionary. For help, '
-                    'see http://parsl.readthedocs.io/en/stable/stubs/parsl.config.Config.html')
         self._config = config
         self.run_dir = make_rundir(config.run_dir)
 
         if config.initialize_logging:
             parsl.set_file_logger("{}/parsl.log".format(self.run_dir), level=logging.DEBUG)
 
-        logger.debug("Starting DataFlowKernel with config\n{}".format(config))
+        logger.info("Starting DataFlowKernel with config\n{}".format(config))
 
         logger.info("Parsl version: {}".format(get_version()))
 
@@ -100,10 +101,12 @@ class DataFlowKernel(object):
         # Monitoring
         self.run_id = str(uuid4())
 
+        self.monitoring: Optional[MonitoringHub]
         self.monitoring = config.monitoring
+
         # hub address and port for interchange to connect
-        self.hub_address = None
-        self.hub_interchange_port = None
+        self.hub_address = None  # type: Optional[str]
+        self.hub_interchange_port = None  # type: Optional[int]
         if self.monitoring:
             if self.monitoring.logdir is None:
                 self.monitoring.logdir = self.run_dir
@@ -111,7 +114,7 @@ class DataFlowKernel(object):
             self.hub_interchange_port = self.monitoring.start(self.run_id, self.run_dir)
 
         self.time_began = datetime.datetime.now()
-        self.time_completed = None
+        self.time_completed: Optional[datetime.datetime] = None
 
         logger.info("Run id is: " + self.run_id)
 
@@ -168,25 +171,30 @@ class DataFlowKernel(object):
         self.checkpointed_tasks = 0
         self._checkpoint_timer = None
         self.checkpoint_mode = config.checkpoint_mode
+        self.checkpointable_tasks: List[TaskRecord] = []
 
         # the flow control keeps track of executors and provider task states;
         # must be set before executors are added since add_executors calls
         # flowcontrol.add_executors.
         self.flowcontrol = FlowControl(self)
 
-        self.executors = {}
+        self.executors: Dict[str, ParslExecutor] = {}
+
         self.data_manager = DataManager(self)
         parsl_internal_executor = ThreadPoolExecutor(max_threads=config.internal_tasks_max_threads, label='_parsl_internal')
-        self.add_executors(config.executors + [parsl_internal_executor])
+        self.add_executors(config.executors)
+        self.add_executors([parsl_internal_executor])
 
         if self.checkpoint_mode == "periodic":
-            try:
-                h, m, s = map(int, config.checkpoint_period.split(':'))
+            if config.checkpoint_period is None:
+                raise ConfigurationError("Checkpoint period must be specified with periodic checkpoint mode")
+            else:
+                try:
+                    h, m, s = map(int, config.checkpoint_period.split(':'))
+                except Exception:
+                    raise ConfigurationError("invalid checkpoint_period provided: {0} expected HH:MM:SS".format(config.checkpoint_period))
                 checkpoint_period = (h * 3600) + (m * 60) + s
                 self._checkpoint_timer = Timer(self.checkpoint, interval=checkpoint_period, name="Checkpoint")
-            except Exception:
-                logger.error("invalid checkpoint_period provided: {0} expected HH:MM:SS".format(config.checkpoint_period))
-                self._checkpoint_timer = Timer(self.checkpoint, interval=(30 * 60), name="Checkpoint")
 
         self.task_count = 0
         self.tasks: Dict[int, TaskRecord] = {}
@@ -435,20 +443,21 @@ class DataFlowKernel(object):
         self.memoizer.update_memo(task_record, future)
 
         # Cover all checkpointing cases here:
-        # Do we need to checkpoint the task now,
-        # keep it around for one of the other checkpoint
-        # methods, or can we wipe it immediately?
+        # Do we need to checkpoint now, or queue for later,
+        # or do nothing?
         if self.checkpoint_mode == 'task_exit':
             self.checkpoint(tasks=[task_record])
         elif self.checkpoint_mode == 'manual' or \
                 self.checkpoint_mode == 'periodic' or \
                 self.checkpoint_mode == 'dfk_exit':
-            pass
+            with self.checkpoint_lock:
+                self.checkpointable_tasks.append(task_record)
         elif self.checkpoint_mode is None:
-            self.wipe_task(task_id)
+            pass
         else:
             raise RuntimeError(f"Invalid checkpoint mode {self.checkpoint_mode}")
 
+        self.wipe_task(task_id)
         return
 
     def _complete_task(self, task_record: TaskRecord, new_state: States, result: Any) -> None:
@@ -485,7 +494,7 @@ class DataFlowKernel(object):
         return result
 
     def wipe_task(self, task_id: int) -> None:
-        """ Remove task with task_id from the internal tasks table
+        """Remove task with task_id from the internal tasks table
         """
         if self.config.garbage_collect:
             del self.tasks[task_id]
@@ -536,8 +545,7 @@ class DataFlowKernel(object):
             if not exceptions_tids:
                 # There are no dependency errors
                 try:
-                    exec_fu = self.launch_task(
-                        task_record, task_record['func'], *new_args, **kwargs)
+                    exec_fu = self.launch_task(task_record)
                     assert isinstance(exec_fu, Future)
                 except Exception as e:
                     # task launched failed somehow. the execution might
@@ -576,7 +584,7 @@ class DataFlowKernel(object):
 
             task_record['exec_fu'] = exec_fu
 
-    def launch_task(self, task_record: TaskRecord, executable: Callable, *args: Tuple[Any, ...], **kwargs: Dict[str, Any]) -> Future:
+    def launch_task(self, task_record: TaskRecord) -> Future:
         """Handle the actual submission of the task to the executor layer.
 
         If the app task has the executors attributes not set (default=='all')
@@ -589,15 +597,15 @@ class DataFlowKernel(object):
 
         Args:
             task_record : The task record
-            executable (callable) : A callable object
-            args (list of positional args)
-            kwargs (arbitrary keyword arguments)
-
 
         Returns:
             Future that tracks the execution of the submitted executable
         """
         task_id = task_record['id']
+        executable = task_record['func']
+        args = task_record['args']
+        kwargs = task_record['kwargs']
+
         task_record['try_time_launched'] = datetime.datetime.now()
 
         memo_fu = self.memoizer.check_memo(task_record)
@@ -619,14 +627,14 @@ class DataFlowKernel(object):
 
         if self.monitoring is not None and self.monitoring.resource_monitoring_enabled:
             wrapper_logging_level = logging.DEBUG if self.monitoring.monitoring_debug else logging.INFO
-            executable = self.monitoring.monitor_wrapper(executable, try_id, task_id,
-                                                         self.monitoring.monitoring_hub_url,
-                                                         self.run_id,
-                                                         wrapper_logging_level,
-                                                         self.monitoring.resource_monitoring_interval,
-                                                         executor.radio_mode,
-                                                         executor.monitor_resources(),
-                                                         self.run_dir)
+            (executable, args, kwargs) = self.monitoring.monitor_wrapper(executable, args, kwargs, try_id, task_id,
+                                                                         self.monitoring.monitoring_hub_url,
+                                                                         self.run_id,
+                                                                         wrapper_logging_level,
+                                                                         self.monitoring.resource_monitoring_interval,
+                                                                         executor.radio_mode,
+                                                                         executor.monitor_resources(),
+                                                                         self.run_dir)
 
         with self.submitter_lock:
             exec_fu = executor.submit(executable, task_record['resource_specification'], *args, **kwargs)
@@ -700,9 +708,7 @@ class DataFlowKernel(object):
                 # this is a hook for post-task stageout
                 # note that nothing depends on the output - which is maybe a bug
                 # in the not-very-tested stageout system?
-                newfunc = self.data_manager.replace_task_stage_out(f_copy, func, executor)
-                if newfunc:
-                    func = newfunc
+                func = self.data_manager.replace_task_stage_out(f_copy, func, executor)
             else:
                 logger.debug("Not performing output staging for: {}".format(repr(f)))
                 app_fut._outputs.append(DataFuture(app_fut, f, tid=app_fut.tid))
@@ -983,12 +989,12 @@ class DataFlowKernel(object):
         logger.info("End of summary")
 
     def _create_remote_dirs_over_channel(self, provider, channel):
-        """ Create script directories across a channel
+        """Create script directories across a channel
 
         Parameters
         ----------
         provider: Provider obj
-           Provider for which scritps dirs are being created
+           Provider for which scripts dirs are being created
         channel: Channel obj
            Channel over which the remote dirs are to be created
         """
@@ -1048,19 +1054,17 @@ class DataFlowKernel(object):
         """
 
         logger.info("Waiting for all remaining tasks to complete")
-        for task_id in list(self.tasks):
+
+        items = list(self.tasks.items())
+        for task_id, task_record in items:
             # .exception() is a less exception throwing way of
             # waiting for completion than .result()
-            if task_id not in self.tasks:
-                logger.debug("Task {} no longer in task list".format(task_id))
-            else:
-                task_record = self.tasks[task_id]  # still a race condition with the above self.tasks if-statement
-                fut = task_record['app_fu']
-                if not fut.done():
-                    fut.exception()
-                # now app future is done, poll until DFK state is final: a DFK state being final and the app future being done do not imply each other.
-                while task_record['status'] not in FINAL_STATES:
-                    time.sleep(0.1)
+            fut = task_record['app_fu']
+            if not fut.done():
+                fut.exception()
+            # now app future is done, poll until DFK state is final: a DFK state being final and the app future being done do not imply each other.
+            while task_record['status'] not in FINAL_STATES:
+                time.sleep(0.1)
 
         logger.info("All remaining tasks completed")
 
@@ -1070,9 +1074,7 @@ class DataFlowKernel(object):
 
         This involves releasing all resources explicitly.
 
-        If the executors are managed by the DFK, then we call scale_in on each of
-        the executors and call executor.shutdown. Otherwise, executor cleanup is left to
-        the user.
+        We call scale_in on each of the executors and call executor.shutdown.
         """
         logger.info("DFK cleanup initiated")
 
@@ -1105,8 +1107,8 @@ class DataFlowKernel(object):
         logger.info("Scaling in and shutting down executors")
 
         for executor in self.executors.values():
-            if executor.managed and not executor.bad_state_is_set:
-                if executor.scaling_enabled:
+            if not executor.bad_state_is_set:
+                if isinstance(executor, BlockProviderExecutor):
                     logger.info(f"Scaling in executor {executor.label}")
                     job_ids = executor.provider.resources.keys()
                     block_ids = executor.scale_in(len(job_ids))
@@ -1120,10 +1122,8 @@ class DataFlowKernel(object):
                 logger.info(f"Shutting down executor {executor.label}")
                 executor.shutdown()
                 logger.info(f"Shut down executor {executor.label}")
-            elif executor.managed and executor.bad_state_is_set:  # and bad_state_is_set
+            else:  # and bad_state_is_set
                 logger.warning(f"Not shutting down executor {executor.label} because it is in bad state")
-            else:
-                logger.info(f"Not shutting down executor {executor.label} because it is unmanaged")
 
         logger.info("Terminated executors")
         self.time_completed = datetime.datetime.now()
@@ -1163,11 +1163,11 @@ class DataFlowKernel(object):
             run under RUNDIR/checkpoints/{tasks.pkl, dfk.pkl}
         """
         with self.checkpoint_lock:
-            checkpoint_queue = None
             if tasks:
                 checkpoint_queue = tasks
             else:
-                checkpoint_queue = list(self.tasks.values())
+                checkpoint_queue = self.checkpointable_tasks
+                self.checkpointable_tasks = []
 
             checkpoint_dir = '{0}/checkpoint'.format(self.run_dir)
             checkpoint_dfk = checkpoint_dir + '/dfk.pkl'
@@ -1195,7 +1195,6 @@ class DataFlowKernel(object):
 
                     if app_fu.done() and app_fu.exception() is None:
                         hashsum = task_record['hashsum']
-                        self.wipe_task(task_id)
                         if not hashsum:
                             continue
                         t = {'hash': hashsum,

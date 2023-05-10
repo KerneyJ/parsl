@@ -7,7 +7,7 @@ from parsl.channels import LocalChannel
 from parsl.launchers import SingleNodeLauncher
 from parsl.providers.pbspro.template import template_string
 from parsl.providers import TorqueProvider
-from parsl.providers.provider_base import JobState, JobStatus
+from parsl.providers.base import JobState, JobStatus
 
 from parsl.providers.torque.torque import translate_table
 
@@ -91,7 +91,7 @@ class PBSProProvider(TorqueProvider):
         self.select_options = select_options
 
     def _status(self):
-        ''' Internal: Do not call. Returns the status list for a list of job_ids
+        '''Returns the status list for a list of job_ids
 
         Args:
               self
