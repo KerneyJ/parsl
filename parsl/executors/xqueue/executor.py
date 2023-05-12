@@ -293,8 +293,11 @@ class XQExecutor(NoStatusHandlingExecutor, RepresentationMixin):
             pass
 
         logger.info("Attempting HighThroughputExecutor shutdown")
-        for w in self.workers:
-            w.kill()
+        for q in self.outgoing_qs:
+            q.put("STOP")
+
+        #for w in self.workers:
+        #    w.kill()
         logger.info("Finished HighThroughputExecutor shutdown attempt")
 
 def execute_task(bufs):
@@ -338,14 +341,24 @@ def worker(worker_id, logdir, task_queue, result_queue):
     # override the global logger inherited from zthe __main__ process (which
     # usually logs to manager.log) with one specific to this worker.
 
+    import cProfile
+
     wlogger = start_file_logger('{}/worker_{}.log'.format(logdir, worker_id), worker_id, name="worker_log", level=logging.INFO)
 
     # Sync worker with master
     wlogger.info('Worker {} started'.format(worker_id))
 
+#    pr = cProfile.Profile()    
+#    pr.enable()
+
     while True:
         # The worker will receive {'task_id':<tid>, 'buffer':<buf>}
         req = task_queue.get()
+        logger.info(f"received: {req}")
+        if req == "STOP":
+#            pr.disable()
+#            pr.dump_stats(f"{logdir}/worker_{worker_id}.pstats")
+            break
         rec = time.time()
         tid = req['task_id']
         wlogger.info("Received task {}".format(tid))
