@@ -180,8 +180,8 @@ class Manager(object):
                                 mem_slots,
                                 math.floor(cores_on_node / cores_per_worker))
 
-        self.pending_task_queue = pQueue()
-        self.pending_result_queue = pQueue()
+        self.pending_task_queue = lQueue(maxsize=100)
+        self.pending_result_queue = lQueue(maxsize=100)
         self.ready_worker_queue = mpQueue()
 
         self.max_queue_size = self.prefetch_capacity + self.worker_count
@@ -289,7 +289,7 @@ class Manager(object):
                     logger.debug("Got tasks: {}, cumulative count of tasks: {}".format([t['task_id'] for t in tasks], task_recv_counter))
 
                     for task in tasks:
-                        self.pending_task_queue.put(task) # logger=logger)
+                        self.pending_task_queue.put(task) #, logger=logger)
                         logger.info(f"Sent task {task['task_id']}")
                         # logger.debug("Ready tasks: {}".format(
                         #    [i['task_id'] for i in self.pending_task_queue]))
@@ -592,7 +592,7 @@ def worker(worker_id, pool_id, pool_size, task_queue, result_queue, worker_queue
                                         'exception': serialize(RemoteExceptionWrapper(*sys.exc_info()))
             })
 
-        result_queue.put(pkl_package) # logger=logger)
+        result_queue.put(pkl_package) #, logger=logger)
         tasks_in_progress.pop(worker_id)
         logger.info("All processing finished for task {}".format(tid))
 
