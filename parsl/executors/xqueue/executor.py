@@ -348,16 +348,16 @@ def worker(worker_id, logdir, task_queue, result_queue):
     # Sync worker with master
     wlogger.info('Worker {} started'.format(worker_id))
 
-#    pr = cProfile.Profile()    
-#    pr.enable()
+    pr = cProfile.Profile()    
+    pr.enable()
 
     while True:
         # The worker will receive {'task_id':<tid>, 'buffer':<buf>}
         req = task_queue.get()
         logger.info(f"received: {req}")
         if req == "STOP":
-#            pr.disable()
-#            pr.dump_stats(f"{logdir}/worker_{worker_id}.pstats")
+            pr.disable()
+            pr.dump_stats(f"{logdir}/worker_{worker_id}.pstats")
             break
         rec = time.time()
         tid = req['task_id']
