@@ -189,6 +189,19 @@ class DataFlowKernel(object):
                 self._checkpoint_timer = Timer(self.checkpoint, interval=(30 * 60), name="Checkpoint")
 
         self.task_count = 0
+        self.submit_time = 0.0
+        self.lir_time = 0.0
+        self.chkp = [[0] * 20, [0] * 8, [0] * 7]
+        self.tasks_per_chkp = 1000
+        self.batch = 0
+        self.lir_batch = 0
+        self.lau_batch = 0
+        self.submit_calls = 0 # calls to submit
+        self.lir_calls = 0 # calls to launch if ready
+        self.lau_calls = 0 # calls to launch task
+        self.submit_file = open(f"{self.run_dir}/submit.csv", "w")
+        self.lir_file = open(f"{self.run_dir}/lir.csv", "w")
+        self.lau_file = open(f"{self.run_dir}/lau.csv", "w")
         self.tasks: Dict[int, TaskRecord] = {}
         self.submitter_lock = threading.Lock()
 
@@ -513,31 +526,43 @@ class DataFlowKernel(object):
         launch_if_ready is thread safe, so may be called from any thread
         or callback.
         """
+        start = time.process_time_ns()
         exec_fu = None
 
+        # chkp 1
         task_id = task_record['id']
+
+        chkp1 = time.process_time_ns()
+        # chkp 2
         with task_record['task_launch_lock']:
 
+            chkp2 = time.process_time_ns()
+            # chkp 3
             if task_record['status'] != States.pending:
                 logger.debug(f"Task {task_id} is not pending, so launch_if_ready skipping")
                 return
 
+            chkp3 = time.process_time_ns()
+            # chkp 4
             if self._count_deps(task_record['depends']) != 0:
                 logger.debug(f"Task {task_id} has outstanding dependencies, so launch_if_ready skipping")
                 return
 
             # We can now launch the task or handle any dependency failures
 
+            chkp4 = time.process_time_ns()
+            # chkp 5
             new_args, kwargs, exceptions_tids = self._unwrap_futures(task_record['args'],
                                                                      task_record['kwargs'])
             task_record['args'] = new_args
             task_record['kwargs'] = kwargs
 
+            chkp5 = time.process_time_ns()
+            # chkp 6
             if not exceptions_tids:
                 # There are no dependency errors
                 try:
-                    exec_fu = self.launch_task(
-                        task_record, task_record['func'], *new_args, **kwargs)
+                    exec_fu = self.launch_task(task_record)
                     assert isinstance(exec_fu, Future)
                 except Exception as e:
                     # task launched failed somehow. the execution might
@@ -562,6 +587,8 @@ class DataFlowKernel(object):
                 exec_fu.set_exception(DependencyError(exceptions_tids,
                                                       task_id))
 
+        chkp6 = time.process_time_ns()
+        # chkp 7
         if exec_fu:
             assert isinstance(exec_fu, Future)
             try:
@@ -575,8 +602,22 @@ class DataFlowKernel(object):
                 logger.error("add_done_callback got an exception which will be ignored", exc_info=True)
 
             task_record['exec_fu'] = exec_fu
+        end = time.process_time_ns()
+        self.chkp[1][1] += chkp1 - start
+        self.chkp[1][2] += chkp2 - chkp1
+        self.chkp[1][3] += chkp3 - chkp2
+        self.chkp[1][4] += chkp4 - chkp3
+        self.chkp[1][5] += chkp5 - chkp4
+        self.chkp[1][6] += chkp6 - chkp5
+        self.chkp[1][7] += end - chkp6
+        self.lir_calls += 1
+        if self.lir_calls % self.tasks_per_chkp == 0:
+            self.lir_file.write(f"{self.lir_batch},{sum(self.chkp[1]) / self.tasks_per_chkp},{','.join([str(n / self.tasks_per_chkp) for n in self.chkp[1][1:]])}\n")
+            self.lir_time = 0
+            self.chkp[1] = [0] * 8
+            self.lir_batch += 1
 
-    def launch_task(self, task_record: TaskRecord, executable: Callable, *args: Tuple[Any, ...], **kwargs: Dict[str, Any]) -> Future:
+    def launch_task(self, task_record: TaskRecord) -> Future:
         """Handle the actual submission of the task to the executor layer.
 
         If the app task has the executors attributes not set (default=='all')
@@ -589,17 +630,21 @@ class DataFlowKernel(object):
 
         Args:
             task_record : The task record
-            executable (callable) : A callable object
-            args (list of positional args)
-            kwargs (arbitrary keyword arguments)
-
 
         Returns:
             Future that tracks the execution of the submitted executable
         """
+        start = time.process_time_ns()
+        # chkp 1
         task_id = task_record['id']
+        executable = task_record['func']
+        args = task_record['args']
+        kwargs = task_record['kwargs']
+
         task_record['try_time_launched'] = datetime.datetime.now()
 
+        chkp1 = time.process_time_ns()
+        # chkp 2
         memo_fu = self.memoizer.check_memo(task_record)
         if memo_fu:
             logger.info("Reusing cached result for task {}".format(task_id))
@@ -608,6 +653,9 @@ class DataFlowKernel(object):
             return memo_fu
 
         task_record['from_memo'] = False
+
+        chkp2 = time.process_time_ns()
+        # chkp 3
         executor_label = task_record["executor"]
         try:
             executor = self.executors[executor_label]
@@ -615,8 +663,9 @@ class DataFlowKernel(object):
             logger.exception("Task {} requested invalid executor {}: config is\n{}".format(task_id, executor_label, self._config))
             raise ValueError("Task {} requested invalid executor {}".format(task_id, executor_label))
 
+        chkp3 = time.process_time_ns()
+        # chkp 4
         try_id = task_record['fail_count']
-
         if self.monitoring is not None and self.monitoring.resource_monitoring_enabled:
             wrapper_logging_level = logging.DEBUG if self.monitoring.monitoring_debug else logging.INFO
             executable = self.monitoring.monitor_wrapper(executable, try_id, task_id,
@@ -627,19 +676,36 @@ class DataFlowKernel(object):
                                                          executor.radio_mode,
                                                          executor.monitor_resources(),
                                                          self.run_dir)
-
+        chkp4 = time.process_time_ns()
+        # chkp 5
         with self.submitter_lock:
             exec_fu = executor.submit(executable, task_record['resource_specification'], *args, **kwargs)
         self.update_task_state(task_record, States.launched)
 
-        self._send_task_log_info(task_record)
+        chkp5 = time.process_time_ns()
+        # chkp 6
+#        self._send_task_log_info(task_record)
+#
+#        if hasattr(exec_fu, "parsl_executor_task_id"):
+#            logger.info(f"Parsl task {task_id} try {try_id} launched on executor {executor.label} with executor id {exec_fu.parsl_executor_task_id}")
+#        else:
+#            logger.info(f"Parsl task {task_id} try {try_id} launched on executor {executor.label}")
+#
+#        self._log_std_streams(task_record)
+        end = time.process_time_ns()
+        self.lau_calls += 1
 
-        if hasattr(exec_fu, "parsl_executor_task_id"):
-            logger.info(f"Parsl task {task_id} try {try_id} launched on executor {executor.label} with executor id {exec_fu.parsl_executor_task_id}")
-        else:
-            logger.info(f"Parsl task {task_id} try {try_id} launched on executor {executor.label}")
-
-        self._log_std_streams(task_record)
+        self.chkp[2][1] += chkp1 - start
+        self.chkp[2][2] += chkp2 - chkp1
+        self.chkp[2][3] += chkp3 - chkp2
+        self.chkp[2][4] += chkp4 - chkp3
+        self.chkp[2][5] += chkp5 - chkp4
+        self.chkp[2][6] += end - chkp5
+        if self.lau_calls % self.tasks_per_chkp == 0:
+            self.lau_file.write(f"{self.lau_batch},{sum(self.chkp[2]) / self.tasks_per_chkp},{','.join([str(n / self.tasks_per_chkp) for n in self.chkp[2][1:]])}\n") 
+            self.chkp[2] = [0] * 7
+            self.lau_time = 0
+            self.lau_batch += 1
 
         return exec_fu
 
@@ -834,14 +900,22 @@ class DataFlowKernel(object):
 
         """
         logger.info(f"submit args -> func: {func}; app_args: {app_args}; executors: {executors}; cache: {cache}; ignore_for_cache: {ignore_for_cache}; app_kwargs: {app_kwargs}; join: {join}")
+        self.submit_calls += 1
+        start = time.process_time_ns()
+
+        # chkp 1
         if ignore_for_cache is None:
             ignore_for_cache = []
 
         if self.cleanup_called:
             raise RuntimeError("Cannot submit to a DFK that has been cleaned up")
-
+        chk1 = time.process_time_ns()
+        # chkp 2
         task_id = self.task_count
         self.task_count += 1
+
+        chk2 = time.process_time_ns()
+        # chkp 3
         if isinstance(executors, str) and executors.lower() == 'all':
             choices = list(e for e in self.executors if e != '_parsl_internal')
         elif isinstance(executors, list):
@@ -851,8 +925,9 @@ class DataFlowKernel(object):
         executor = random.choice(choices)
         logger.debug("Task {} will be sent to executor {}".format(task_id, executor))
 
+        chk3 = time.process_time_ns()
+        # chkp 4
         # The below uses func.__name__ before it has been wrapped by any staging code.
-
         label = app_kwargs.get('label')
         for kw in ['stdout', 'stderr']:
             if kw in app_kwargs:
@@ -872,6 +947,8 @@ class DataFlowKernel(object):
 
         resource_specification = app_kwargs.get('parsl_resource_specification', {})
 
+        chk4 = time.process_time_ns()
+        # chkp 5
         task_def: TaskRecord
         task_def = {'depends': None,
                     'executor': executor,
@@ -894,15 +971,23 @@ class DataFlowKernel(object):
                     'try_time_returned': None,
                     'resource_specification': subtime}
 
+        chk5 = time.process_time_ns()
+        # chkp 6
         self.update_task_state(task_def, States.unsched)
 
+        chk6 = time.process_time_ns()
+        # chkp 7
         app_fu = AppFuture(task_def)
 
+        chk7 = time.process_time_ns()
+        # chkp 8
         # Transform remote input files to data futures
         app_args, app_kwargs, func = self._add_input_deps(executor, app_args, app_kwargs, func)
 
         func = self._add_output_deps(executor, app_args, app_kwargs, app_fu, func)
 
+        chk8 = time.process_time_ns()
+        # chkp 9
         task_def.update({
                     'args': app_args,
                     'func': func,
@@ -911,12 +996,21 @@ class DataFlowKernel(object):
 
         assert task_id not in self.tasks
 
+        chk9 = time.process_time_ns()
+        # chkp 10
         self.tasks[task_id] = task_def
 
+        chk10 = time.process_time_ns()
+        # chkp 11
         # Get the list of dependencies for the task
         depends = self._gather_all_deps(app_args, app_kwargs)
+
+        chk11 = time.process_time_ns()
+        # chkp 12
         task_def['depends'] = depends
 
+        chk12 = time.process_time_ns()
+        # chkp 13
         depend_descs = []
         for d in depends:
             if isinstance(d, AppFuture) or isinstance(d, DataFuture):
@@ -933,12 +1027,21 @@ class DataFlowKernel(object):
                                                               task_def['func_name'],
                                                               waiting_message))
 
+        chk13 = time.process_time_ns()
+        # chkp 14
         task_def['task_launch_lock'] = threading.Lock()
 
+        chk14 = time.process_time_ns()
+        # chkp 15
         app_fu.add_done_callback(partial(self.handle_app_update, task_def))
+
+        chk15 = time.process_time_ns()
+        # chkp 16
         self.update_task_state(task_def, States.pending)
         logger.debug("Task {} set to pending state with AppFuture: {}".format(task_id, task_def['app_fu']))
 
+        chk16 = time.process_time_ns()
+        # chkp 17
         self._send_task_log_info(task_def)
 
         # at this point add callbacks to all dependencies to do a launch_if_ready
@@ -946,13 +1049,14 @@ class DataFlowKernel(object):
 
         # we need to be careful about the order of setting the state to pending,
         # adding the callbacks, and caling launch_if_ready explicitly once always below.
-
         # I think as long as we call launch_if_ready once after setting pending, then
         # we can add the callback dependencies at any point: if the callbacks all fire
         # before then, they won't cause a launch, but the one below will. if they fire
         # after we set it pending, then the last one will cause a launch, and the
         # explicit one won't.
 
+        chk17 = time.process_time_ns()
+        # chkp 18
         for d in depends:
 
             def callback_adapter(dep_fut: Future) -> None:
@@ -963,8 +1067,39 @@ class DataFlowKernel(object):
             except Exception as e:
                 logger.error("add_done_callback got an exception {} which will be ignored".format(e))
 
+        chk18 = time.process_time_ns()
+        # chkp 19
         self.launch_if_ready(task_def)
         logger.info(f"Task record: {task_def}")
+
+        end = time.process_time_ns()
+
+        # time stats
+        self.chkp[0][1] += chk1 - start 
+        self.chkp[0][2] += chk2 - chk1
+        self.chkp[0][3] += chk3 - chk2
+        self.chkp[0][4] += chk4 - chk3
+        self.chkp[0][5] += chk5 - chk4
+        self.chkp[0][6] += chk6 - chk5
+        self.chkp[0][7] += chk7 - chk6
+        self.chkp[0][8] += chk8 - chk7
+        self.chkp[0][9] += chk9 - chk8
+        self.chkp[0][10] += chk10 - chk9
+        self.chkp[0][11] += chk11 - chk10
+        self.chkp[0][12] += chk12 - chk11
+        self.chkp[0][13] += chk13 - chk12
+        self.chkp[0][14] += chk14 - chk13
+        self.chkp[0][15] += chk15 - chk14
+        self.chkp[0][16] += chk16 - chk15
+        self.chkp[0][17] += chk17 - chk16
+        self.chkp[0][18] += chk18 - chk17
+        self.chkp[0][19] += end - chk18
+        self.submit_time += 1
+        if self.submit_calls % self.tasks_per_chkp == 0:
+            self.submit_file.write(f"{self.batch},{sum(self.chkp[0]) / self.tasks_per_chkp},{','.join([str(n / self.tasks_per_chkp) for n in self.chkp[0][1:]])}\n")
+            self.submit_time = 0
+            self.chkp[0] = [0] * 20
+            self.batch += 1
         return app_fu
 
     # it might also be interesting to assert that all DFK
@@ -1049,19 +1184,17 @@ class DataFlowKernel(object):
         """
 
         logger.info("Waiting for all remaining tasks to complete")
-        for task_id in list(self.tasks):
+
+        items = list(self.tasks.items())
+        for task_id, task_record in items:
             # .exception() is a less exception throwing way of
             # waiting for completion than .result()
-            if task_id not in self.tasks:
-                logger.debug("Task {} no longer in task list".format(task_id))
-            else:
-                task_record = self.tasks[task_id]  # still a race condition with the above self.tasks if-statement
-                fut = task_record['app_fu']
-                if not fut.done():
-                    fut.exception()
-                # now app future is done, poll until DFK state is final: a DFK state being final and the app future being done do not imply each other.
-                while task_record['status'] not in FINAL_STATES:
-                    time.sleep(0.1)
+            fut = task_record['app_fu']
+            if not fut.done():
+                fut.exception()
+            # now app future is done, poll until DFK state is final: a DFK state being final and the app future being done do not imply each other.
+            while task_record['status'] not in FINAL_STATES:
+                time.sleep(0.1)
 
         logger.info("All remaining tasks completed")
 
@@ -1143,6 +1276,15 @@ class DataFlowKernel(object):
             self.monitoring.close()
             logger.info("Terminated monitoring")
 
+        logger.info(f"Comparison of submit, launch_if_ready and task count\n" \
+                    f"\tSubmit calls: {self.submit_calls}\n" \
+                    f"\tLaunch if ready: {self.lir_calls}\n" \
+                    f"\tTask count: {self.task_count}\n")
+        logger.info(f"Average task submit time: {self.submit_time / self.submit_calls} submit calls: {self.submit_calls}\n")
+        logger.info(f"Average task launch if ready time: {self.lir_time / self.lir_calls}; lir calls: {self.lir_calls}\n")
+        self.submit_file.close()
+        self.lir_file.close()
+        self.lau_file.close()
         logger.info("DFK cleanup complete")
 
     def checkpoint(self, tasks: Optional[Sequence[TaskRecord]] = None) -> str:
