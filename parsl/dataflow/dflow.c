@@ -334,8 +334,8 @@ static PyObject* dest_dfk(PyObject* self){
     Py_XDECREF(pystr_adc);
     Py_XDECREF(pystr_setfut);
 
-    printf("Malloc count %lu\n", malloccount);
-    fflush(0);
+    //printf("Malloc count %lu\n", malloccount);
+    //fflush(0);
 
     return Py_None;
 }
