@@ -491,7 +491,7 @@ static PyObject* submit(PyObject* self, PyObject* args){
     }
     else{
         // use non internal executor(s)
-        exec = executors[(rand() % executorcount-1) + 1];
+        exec = executors[0];
     }
 
     if((task_id = create_task(exec.label, func_name, time_invoked, join, Py_None, Py_None, exec.obj, func, fargs, fkwargs)) < 0){

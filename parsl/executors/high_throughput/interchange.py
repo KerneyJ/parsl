@@ -703,7 +703,7 @@ def starter(comm_q, *args, **kwargs):
     ic = Interchange(*args, **kwargs)
     comm_q.put((ic.worker_task_port,
                 ic.worker_result_port))
-    # ic.start()
+    ic.start()
 
 
 if __name__ == '__main__':
