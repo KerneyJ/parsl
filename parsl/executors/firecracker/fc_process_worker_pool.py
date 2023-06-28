@@ -3,6 +3,8 @@
 import argparse
 import logging
 import os
+import subprocess
+import socket
 import sys
 import platform
 import threading
@@ -53,6 +55,17 @@ class Manager:
 
     """
     def __init__(self,
+                 fc_path,
+                 unixsock_path,
+                 kernel_path,
+                 rootfs_path,
+                 tap_dev,
+                 kernel_boot_args,
+                 guest_netdev,
+                 fc_extra_args,
+                 fc_port,
+                 fc_mac,
+                 # firecracker stuff ^^^
                  addresses="127.0.0.1",
                  address_probe_timeout=30,
                  task_port="50097",
@@ -147,6 +160,18 @@ class Manager:
             logger.exception("Caught exception while trying to determine viable address to interchange")
             print("Failed to find a viable address to connect to interchange. Exiting")
             exit(5)
+
+        self.fc_path = fc_path
+        self.unixsock_path = unixsock_path
+        self.kernel_path = kernel_path
+        self.rootfs_path = rootfs_path
+        self.tap_dev = tap_dev
+        self.kernel_boot_args = kernel_boot_args
+        self.guest_netdev = guest_netdev
+        self.fc_args = "--api-sock {}/firecracker.socket".format(self.unixsock_path) # fc_extra_args) # TODO in future this will have to be a list of different fc args because multiple workers will require multiple unix sockets
+        self.fc_port = fc_port
+        self.fc_ip = "10.0.0.2" # TODO make this not hard coded
+        self.fc_mac = fc_mac
 
         self.context = zmq.Context()
         self.task_incoming = self.context.socket(zmq.DEALER)
@@ -418,25 +443,65 @@ class Manager:
         """ Start the worker processes.
 
         TODO: Move task receiving to a thread
+        modified to start one firecracker vm and send tasks to it
         """
+
         self._kill_event = threading.Event()
         self._tasks_in_progress = multiprocessing.Manager().dict()
 
-        self.procs = {} # need to turn this into fc images
-        for worker_id in range(self.worker_count):
-            p = self.mpProcess(target=worker,
-                               args=(worker_id,
-                                     self.uid,
-                                     self.worker_count,
-                                     self.pending_task_queue,
-                                     self.pending_result_queue,
-                                     self.ready_worker_queue,
-                                     self._tasks_in_progress,
-                                     self.cpu_affinity,
-                                     self.available_accelerators[worker_id] if self.accelerators_available else None),
-                               name="FC-Worker-{}".format(worker_id))
-            p.start()
-            self.procs[worker_id] = p
+        logger.info("launching firecracker: {}/firecracker ".format(self.fc_path) + self.fc_args)
+        self.fc_process = subprocess.Popen(["{}/firecracker".format(self.fc_path)] + self.fc_args.split(" "))
+        self.worker_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # start up firecracker by making api request
+        logger.info("Setting up firecracker stuff")
+        time.sleep(1)
+        self.transport = httpx.HTTPTransport(uds="{}/firecracker.socket".format(self.unixsock_path))
+        self.client = httpx.Client(transport=self.transport)
+        self.fc_logfile = "{}/firecracker.log".format(self.unixsock_path)
+        open(self.fc_logfile, 'x').close() # create empty logging file
+        data_startlog = {"log_path": self.fc_logfile, "level": "Debug", "show_level": True, "show_log_origin": True}
+        data_addbootsource = {"kernel_image_path": self.kernel_path, "boot_args": self.kernel_boot_args}
+        data_setrootfs = {"drive_id": "rootfs", "path_on_host": self.rootfs_path, "is_root_device": True, "is_read_only": False}
+        data_setupnet = {"iface_id": self.guest_netdev, "guest_mac": self.fc_mac, "host_dev_name": self.tap_dev}
+        data_startinstance = {"action_type": "InstanceStart"}
+
+        stay_alive = True
+        def query():
+            while stay_alive:
+                self.worker_socket.sendto(b"hello", (self.fc_ip, self.fc_port))
+                logger.info("saying hello")
+                time.sleep(1)
+        
+        self.transport = httpx.HTTPTransport(uds="/home/jamie/funcx_virtines_sum23/firecracker/firecracker.socket")
+        self.client.put("http://localhost/logger", content=json.dumps(data_startlog).encode())
+        self.client.put("http://localhost/boot-source", content=json.dumps(data_addbootsource).encode())
+        self.client.put("http://localhost/drives/rootfs", content=json.dumps(data_setrootfs).encode())
+        self.client.put(f"http://localhost/network-interfaces/{self.guest_netdev}", content=json.dumps(data_setupnet).encode())
+        time.sleep(0.015)
+        res = self.client.put("http://localhost/actions", content=json.dumps(data_startinstance).encode())
+        time.sleep(0.15)
+        t = threading.Thread(target=query)
+        t.start()
+        time.sleep(0.15)
+        data, addr = self.worker_socket.recvfrom(1024)
+        logger.critical(f"received {data} from {addr}")
+        stay_alive = False
+        self.fc_process.kill()
+#        self.procs = {} # need to turn this into fc images
+#        for worker_id in range(self.worker_count):
+#            p = self.mpProcess(target=worker,
+#                               args=(worker_id,
+#                                     self.uid,
+#                                     self.worker_count,
+#                                     self.pending_task_queue,
+#                                     self.pending_result_queue,
+#                                     self.ready_worker_queue,
+#                                     self._tasks_in_progress,
+#                                     self.cpu_affinity,
+#                                     self.available_accelerators[worker_id] if self.accelerators_available else None),
+#                               name="FC-Worker-{}".format(worker_id))
+#            p.start()
+#            self.procs[worker_id] = p
 
         logger.debug("Workers started")
 
@@ -683,6 +748,26 @@ if __name__ == "__main__":
     parser.add_argument("--start-method", type=str, choices=["fork", "spawn", "thread"], default="fork",
                         help="Method used to start new worker processes")
 
+    parser.add_argument("--fc_path", required=True,
+                        help="path to firecracker binary")
+    parser.add_argument("--unixsock_path", required=True,
+                        help="path to unix socket")
+    parser.add_argument("--kernel_path", required=True,
+                        help="path to kernel image")
+    parser.add_argument("--rootfs_path", required=True,
+                        help="path to rootfs")
+    parser.add_argument("--tap_dev", required=True,
+                        help="tap device name")
+    parser.add_argument("--kernel_boot_args", default="console=ttyS0 reboot=k panic=1 pci=off",
+                        help="kernel boot arguments")
+    parser.add_argument("--guest_netdev", default="eth0",
+                        help="name of the device in the guest")
+    parser.add_argument("--fc_mac", default="AA:FC:00:00:00:01",
+                        help="firecracker mac address")
+    parser.add_argument("--fc_extra_args", default="",
+                        help="extra arugments to firecracker")
+    parser.add_argument("--fc_port", default=20001,
+                        help="port for workers, each worker will have their own ip")
     args = parser.parse_args()
 
     os.makedirs(os.path.join(args.logdir, "block-{}".format(args.block_id), args.uid), exist_ok=True)
@@ -712,6 +797,17 @@ if __name__ == "__main__":
         logger.info("Accelerators: {}".format(" ".join(args.available_accelerators)))
         logger.info("Start method: {}".format(args.start_method))
 
+        logger.info("firecracker path: {}".format(args.fc_path))
+        logger.info("unix socket path: {}".format(args.unixsock_path))
+        logger.info("kernel path: {}".format(args.kernel_path))
+        logger.info("root filesystem path: {}".format(args.rootfs_path))
+        logger.info("network tap device: {}".format(args.tap_dev))
+        logger.info("kernel boot arguments: {}".format(args.kernel_boot_args))
+        logger.info("guest net device name: {}".format(args.guest_netdev))
+        logger.info("firecracker mac address: {}".format(args.fc_mac))
+        logger.info("firecracker extra arguments: {}".format(args.fc_extra_args))
+        logger.info("firecracker vm port: {}".format(args.fc_port))
+
         manager = Manager(task_port=args.task_port,
                           result_port=args.result_port,
                           addresses=args.addresses,
@@ -726,7 +822,18 @@ if __name__ == "__main__":
                           heartbeat_period=int(args.hb_period),
                           poll_period=int(args.poll),
                           cpu_affinity=args.cpu_affinity,
-                          available_accelerators=args.available_accelerators)
+                          available_accelerators=args.available_accelerators,
+                          # firecracker arguments below
+                          fc_path=args.fc_path,
+                          unixsock_path=args.unixsock_path,
+                          kernel_path=args.kernel_path,
+                          rootfs_path=args.rootfs_path,
+                          tap_dev=args.tap_dev,
+                          kernel_boot_args=args.kernel_boot_args,
+                          guest_netdev=args.guest_netdev,
+                          fc_extra_args=args.fc_extra_args,
+                          fc_port=args.fc_port,
+                          fc_mac=args.fc_mac)
         manager.start()
 
     except Exception:

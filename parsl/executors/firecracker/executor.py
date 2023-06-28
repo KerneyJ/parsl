@@ -188,6 +188,16 @@ class FirecrackerExecutor(BlockProviderExecutor, RepresentationMixin):
 
     @typeguard.typechecked
     def __init__(self,
+                 fc_path,
+                 unixsock_path,
+                 kernel_path,
+                 rootfs_path,
+                 tap_dev,
+                 kernel_boot_args="console=ttyS0 reboot=k panic=1 pci=off",
+                 guest_netdev="eth0",
+                 fc_mac="AA:FC:00:00:00:01",
+                 fc_extra_args="",
+                 fc_port=20001,
                  label: str = 'FirecrackerExecutor',
                  provider: ExecutionProvider = LocalProvider(),
                  launch_cmd: Optional[str] = None,
@@ -281,8 +291,20 @@ class FirecrackerExecutor(BlockProviderExecutor, RepresentationMixin):
         self.worker_logdir_root = worker_logdir_root
         self.cpu_affinity = cpu_affinity
 
+        self.fc_path = fc_path
+        self.unixsock_path = unixsock_path
+        self.kernel_path = kernel_path
+        self.rootfs_path = rootfs_path
+        self.tap_dev = tap_dev
+        self.kernel_boot_args = kernel_boot_args
+        self.guest_netdev = guest_netdev
+        self.fc_mac = fc_mac
+        self.fc_extra_args = fc_extra_args
+        self.fc_args = f"--api-sock \"{self.unixsock_path}\"" + self.fc_extra_args
+        self.fc_port = fc_port
+
         if not launch_cmd:
-            self.launch_cmd = ("process_worker_pool.py {debug} {max_workers} "
+            self.launch_cmd = ("fc_process_worker_pool.py {debug} {max_workers} "
                                "-a {addresses} "
                                "-p {prefetch_capacity} "
                                "-c {cores_per_worker} "
@@ -297,7 +319,12 @@ class FirecrackerExecutor(BlockProviderExecutor, RepresentationMixin):
                                "--hb_threshold={heartbeat_threshold} "
                                "--cpu-affinity {cpu_affinity} "
                                "--available-accelerators {accelerators} "
-                               "--start-method {start_method}")
+                               "--start-method {start_method} "
+                               "--fc_path {fc_path} "
+                               "--unixsock_path {unixsock_path} "
+                               "--kernel_path {kernel_path} "
+                               "--rootfs_path {rootfs_path} "
+                               "--tap_dev {tap_dev}")
 
     radio_mode = "htex"
 
@@ -333,7 +360,12 @@ class FirecrackerExecutor(BlockProviderExecutor, RepresentationMixin):
                                        logdir=worker_logdir,
                                        cpu_affinity=self.cpu_affinity,
                                        accelerators=" ".join(self.available_accelerators),
-                                       start_method=self.start_method)
+                                       start_method=self.start_method,
+                                       fc_path=self.fc_path,
+                                       unixsock_path=self.unixsock_path,
+                                       kernel_path=self.kernel_path,
+                                       rootfs_path=self.rootfs_path,
+                                       tap_dev=self.tap_dev)
         self.launch_cmd = l_cmd
         logger.debug("Launch command: {}".format(self.launch_cmd))
 
