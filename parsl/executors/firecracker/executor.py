@@ -13,8 +13,8 @@ import math
 
 from parsl.serialize import pack_apply_message, deserialize
 from parsl.app.errors import RemoteExceptionWrapper
-from parsl.executors.high_throughput import zmq_pipes
-from parsl.executors.high_throughput import interchange
+from parsl.executors.firecracker import zmq_pipes
+from parsl.executors.firecracker import interchange
 from parsl.executors.errors import (
     BadMessage, ScalingFailed,
     DeserializationError, SerializationError,

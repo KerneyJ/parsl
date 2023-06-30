@@ -126,7 +126,7 @@ class Interchange:
         self.logdir = logdir
         os.makedirs(self.logdir, exist_ok=True)
 
-        start_file_logger("{}/interchange.log".format(self.logdir), level=logging_level)
+        start_file_logger("{}/interchange.log".format(self.logdir), level=logging.DEBUG)
         logger.propagate = False
         logger.debug("Initializing Interchange process")
 

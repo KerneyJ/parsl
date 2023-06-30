@@ -327,7 +327,9 @@ class Manager:
                     logger.debug("Got executor tasks: {}, cumulative count of tasks: {}".format([t['task_id'] for t in tasks], task_recv_counter))
 
                     for task in tasks:
-                        self.pending_task_queue.put(task)
+                        logger.info("sending task to the worker")
+                        # self.pending_task_queue.put(task)
+                        self.worker_socket.sendall(pickle.dumps(task)) #, (self.fc_ip, self.fc_port))# TODO finish
                         # logger.debug("Ready tasks: {}".format(
                         #    [i['task_id'] for i in self.pending_task_queue]))
 
@@ -364,11 +366,13 @@ class Manager:
         last_beat = time.time()
         last_result_beat = time.time()
         items = []
-
+        logger.info("Starting to push results")
         while not kill_event.is_set():
             try:
                 logger.debug("Starting pending_result_queue get")
-                r = self.pending_result_queue.get(block=True, timeout=push_poll_period)
+                r = self.worker_socket.recv(2 ** 20)
+                logger.info("received -> {} <- from worker".format(r.decode()))
+                # r = self.pending_result_queue.get(block=True, timeout=push_poll_period)
                 logger.debug("Got a result item")
                 items.append(r)
             except queue.Empty:
@@ -385,6 +389,7 @@ class Manager:
                 last_beat = time.time()
                 if items:
                     logger.debug(f"Result send: Pushing {len(items)} items")
+                    #logger.debug(f"Result: {pickle.loads(items[0])}")
                     self.result_outgoing.send_multipart(items)
                     logger.debug("Result send: Pushed")
                     items = []
@@ -406,7 +411,7 @@ class Manager:
         """
 
         logger.debug("Starting worker watchdog")
-
+        return # TODO Remove
         while not kill_event.is_set():
             for worker_id, p in self.procs.items():
                 if not p.is_alive():
@@ -445,15 +450,14 @@ class Manager:
         TODO: Move task receiving to a thread
         modified to start one firecracker vm and send tasks to it
         """
-
         self._kill_event = threading.Event()
         self._tasks_in_progress = multiprocessing.Manager().dict()
 
         logger.info("launching firecracker: {}/firecracker ".format(self.fc_path) + self.fc_args)
         self.fc_process = subprocess.Popen(["{}/firecracker".format(self.fc_path)] + self.fc_args.split(" "))
-        self.worker_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.worker_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         # start up firecracker by making api request
-        logger.info("Setting up firecracker stuff")
+        logger.info("Setting up firecracker stuff {}".format(time.time()))
         time.sleep(1)
         self.transport = httpx.HTTPTransport(uds="{}/firecracker.socket".format(self.unixsock_path))
         self.client = httpx.Client(transport=self.transport)
@@ -465,43 +469,29 @@ class Manager:
         data_setupnet = {"iface_id": self.guest_netdev, "guest_mac": self.fc_mac, "host_dev_name": self.tap_dev}
         data_startinstance = {"action_type": "InstanceStart"}
 
-        stay_alive = True
-        def query():
-            while stay_alive:
-                self.worker_socket.sendto(b"hello", (self.fc_ip, self.fc_port))
-                logger.info("saying hello")
-                time.sleep(1)
-        
         self.transport = httpx.HTTPTransport(uds="/home/jamie/funcx_virtines_sum23/firecracker/firecracker.socket")
         self.client.put("http://localhost/logger", content=json.dumps(data_startlog).encode())
         self.client.put("http://localhost/boot-source", content=json.dumps(data_addbootsource).encode())
         self.client.put("http://localhost/drives/rootfs", content=json.dumps(data_setrootfs).encode())
         self.client.put(f"http://localhost/network-interfaces/{self.guest_netdev}", content=json.dumps(data_setupnet).encode())
         time.sleep(0.015)
+        logger.info("Launching firecracker instance: {}".format(time.time()))
         res = self.client.put("http://localhost/actions", content=json.dumps(data_startinstance).encode())
         time.sleep(0.15)
-        t = threading.Thread(target=query)
-        t.start()
-        time.sleep(0.15)
-        data, addr = self.worker_socket.recvfrom(1024)
-        logger.critical(f"received {data} from {addr}")
-        stay_alive = False
-        self.fc_process.kill()
-#        self.procs = {} # need to turn this into fc images
-#        for worker_id in range(self.worker_count):
-#            p = self.mpProcess(target=worker,
-#                               args=(worker_id,
-#                                     self.uid,
-#                                     self.worker_count,
-#                                     self.pending_task_queue,
-#                                     self.pending_result_queue,
-#                                     self.ready_worker_queue,
-#                                     self._tasks_in_progress,
-#                                     self.cpu_affinity,
-#                                     self.available_accelerators[worker_id] if self.accelerators_available else None),
-#                               name="FC-Worker-{}".format(worker_id))
-#            p.start()
-#            self.procs[worker_id] = p
+        # TODO send data to the worker first here
+        def connect_timeout(socket, ip, port, timeout=10):
+            start = time.time()
+            while time.time() - start < timeout:
+                try:
+                    socket.connect((ip, port))
+                except:
+                    continue
+
+        connect_timeout(self.worker_socket, self.fc_ip, self.fc_port)
+        init_msg = self.worker_socket.recv(1024)
+        logger.info("received initial message: {}".format(init_msg))
+        # self.worker_socket.sendto(b"start", (self.fc_ip, self.fc_port))
+        # data, addr = self.worker_socket.recvfrom(1024)
 
         logger.debug("Workers started")
 
@@ -528,13 +518,10 @@ class Manager:
         self._task_puller_thread.join()
         self._result_pusher_thread.join()
         self._worker_watchdog_thread.join()
-        for proc_id in self.procs:
-            self.procs[proc_id].terminate()
-            logger.critical("Terminating worker {}: is_alive()={}".format(self.procs[proc_id],
-                                                                          self.procs[proc_id].is_alive()))
-            self.procs[proc_id].join()
-            logger.debug("Worker {} joined successfully".format(self.procs[proc_id]))
 
+        # self.worker_socket.sendall(b"STOP")
+        # self.worker_socket.sendto(b"STOP", (self.fc_ip, self.fc_port))
+        self.fc_process.kill()
         self.task_incoming.close()
         self.result_outgoing.close()
         self.context.term()
@@ -736,7 +723,7 @@ if __name__ == "__main__":
     parser.add_argument("--hb_threshold", default=120,
                         help="Heartbeat threshold in seconds. Uses manager default unless set")
     parser.add_argument("--address_probe_timeout", default=30,
-                        help="Timeout to probe for viable address to interchange. Default: 30s")
+                  help="Timeout to probe for viable address to interchange. Default: 30s")
     parser.add_argument("--poll", default=10,
                         help="Poll period used in milliseconds")
     parser.add_argument("-r", "--result_port", required=True,
