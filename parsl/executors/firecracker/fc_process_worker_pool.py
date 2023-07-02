@@ -172,6 +172,11 @@ class Manager:
         self.fc_port = fc_port
         self.fc_ip = "10.0.0.2" # TODO make this not hard coded
         self.fc_mac = fc_mac
+        self.result_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.result_addr = ("10.0.0.1", 30000)
+        self.result_socket.bind(self.result_addr) # TODO maybe loop to find a port if 30000 is taken
+        self.worker_sockets = []
+        self.worker_result_sockets = []
 
         self.context = zmq.Context()
         self.task_incoming = self.context.socket(zmq.DEALER)
@@ -329,7 +334,7 @@ class Manager:
                     for task in tasks:
                         logger.info("sending task to the worker")
                         # self.pending_task_queue.put(task)
-                        self.worker_socket.sendall(pickle.dumps(task)) #, (self.fc_ip, self.fc_port))# TODO finish
+                        self.worker_socket.sendall(pickle.dumps(task))
                         # logger.debug("Ready tasks: {}".format(
                         #    [i['task_id'] for i in self.pending_task_queue]))
 
@@ -370,7 +375,7 @@ class Manager:
         while not kill_event.is_set():
             try:
                 logger.debug("Starting pending_result_queue get")
-                r = self.worker_socket.recv(2 ** 20)
+                r = self.result_socket.recv(2 ** 20)
                 logger.info("received -> {} <- from worker".format(r.decode()))
                 # r = self.pending_result_queue.get(block=True, timeout=push_poll_period)
                 logger.debug("Got a result item")
@@ -400,50 +405,6 @@ class Manager:
 
         logger.critical("Exiting")
 
-    @wrap_with_logs
-    def worker_watchdog(self, kill_event):
-        """Keeps workers alive.
-
-        Parameters:
-        -----------
-        kill_event : threading.Event
-              Event to let the thread know when it is time to die.
-        """
-
-        logger.debug("Starting worker watchdog")
-        return # TODO Remove
-        while not kill_event.is_set():
-            for worker_id, p in self.procs.items():
-                if not p.is_alive():
-                    logger.error("Worker {} has died".format(worker_id))
-                    try:
-                        task = self._tasks_in_progress.pop(worker_id)
-                        logger.info("Worker {} was busy when it died".format(worker_id))
-                        try:
-                            raise WorkerLost(worker_id, platform.node())
-                        except Exception:
-                            logger.info("Putting exception for executor task {} in the pending result queue".format(task['task_id']))
-                            result_package = {'type': 'result', 'task_id': task['task_id'], 'exception': serialize(RemoteExceptionWrapper(*sys.exc_info()))}
-                            pkl_package = pickle.dumps(result_package)
-                            self.pending_result_queue.put(pkl_package)
-                    except KeyError:
-                        logger.info("Worker {} was not busy when it died".format(worker_id))
-
-                    p = self.mpProcess(target=worker, args=(worker_id,
-                                                            self.uid,
-                                                            self.worker_count,
-                                                            self.pending_task_queue,
-                                                            self.pending_result_queue,
-                                                            self.ready_worker_queue,
-                                                            self._tasks_in_progress,
-                                                            self.cpu_affinity),
-                                       name="FC-Worker-{}".format(worker_id))
-                    self.procs[worker_id] = p
-                    logger.info("Worker {} has been restarted".format(worker_id))
-                time.sleep(self.heartbeat_period)
-
-        logger.critical("Exiting")
-
     def start(self):
         """ Start the worker processes.
 
@@ -455,7 +416,7 @@ class Manager:
 
         logger.info("launching firecracker: {}/firecracker ".format(self.fc_path) + self.fc_args)
         self.fc_process = subprocess.Popen(["{}/firecracker".format(self.fc_path)] + self.fc_args.split(" "))
-        self.worker_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.worker_sockets.append(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
         # start up firecracker by making api request
         logger.info("Setting up firecracker stuff {}".format(time.time()))
         time.sleep(1)
@@ -477,7 +438,7 @@ class Manager:
         time.sleep(0.015)
         logger.info("Launching firecracker instance: {}".format(time.time()))
         res = self.client.put("http://localhost/actions", content=json.dumps(data_startinstance).encode())
-        time.sleep(0.15)
+        time.sleep(0.015)
         # TODO send data to the worker first here
         def connect_timeout(socket, ip, port, timeout=10):
             start = time.time()
@@ -487,26 +448,33 @@ class Manager:
                 except:
                     continue
 
-        connect_timeout(self.worker_socket, self.fc_ip, self.fc_port)
-        init_msg = self.worker_socket.recv(1024)
+        self.result_socket.listen(5)
+        connect_timeout(self.worker_sockets[0], self.fc_ip, self.fc_port)
+        # self.worker_sockets[0].sendall(pickle.dumps(self.result_addr))
+        logger.info("Connected to worker to worker")
+        init_msg = self.worker_sockets[0].recv(1024)
         logger.info("received initial message: {}".format(init_msg))
+        self.worker_sockets[0].sendall(pickle.dumps(self.result_addr))
         # self.worker_socket.sendto(b"start", (self.fc_ip, self.fc_port))
         # data, addr = self.worker_socket.recvfrom(1024)
+        client, addr = self.result_socket.accept()
+        logger.info("Connected to worker at address {}".format(addr))
+        # self.result_socket.listen(self.worker_count)
+        # logger.info("Listening for {} workers".format(self.worker_count))
+        # for _ in range(self.worker_count):
+        #     client, addr = self.result_socket.accept()
+        #     logger.info("Connected to worker at {}".format(addr))
+        #     self.result_sockets.append(client)
 
         logger.debug("Workers started")
-
         self._task_puller_thread = threading.Thread(target=self.pull_tasks,
                                                     args=(self._kill_event,),
                                                     name="Task-Puller")
         self._result_pusher_thread = threading.Thread(target=self.push_results,
                                                       args=(self._kill_event,),
                                                       name="Result-Pusher")
-        self._worker_watchdog_thread = threading.Thread(target=self.worker_watchdog,
-                                                        args=(self._kill_event,),
-                                                        name="worker-watchdog")
         self._task_puller_thread.start()
         self._result_pusher_thread.start()
-        self._worker_watchdog_thread.start()
 
         logger.info("Loop start")
 
@@ -517,10 +485,7 @@ class Manager:
 
         self._task_puller_thread.join()
         self._result_pusher_thread.join()
-        self._worker_watchdog_thread.join()
 
-        # self.worker_socket.sendall(b"STOP")
-        # self.worker_socket.sendto(b"STOP", (self.fc_ip, self.fc_port))
         self.fc_process.kill()
         self.task_incoming.close()
         self.result_outgoing.close()
@@ -529,10 +494,8 @@ class Manager:
         logger.info("process_worker_pool ran for {} seconds".format(delta))
         return
 
-
 def execute_task(bufs):
     """Deserialize the buffer and execute the task.
-
     Returns the result or throws exception.
     """
     user_ns = locals()
