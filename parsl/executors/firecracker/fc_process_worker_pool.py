@@ -416,43 +416,47 @@ class Manager:
         self._kill_event = threading.Event()
         self._tasks_in_progress = multiprocessing.Manager().dict()
 
-        #logger.info("launching firecracker: {}/firecracker ".format(self.fc_path) + self.fc_args)
-        #self.guest_log = open("{}/guest.log".format(self.fc_path), "w")
-        #self.fc_process = subprocess.Popen(["{}/firecracker".format(self.fc_path)] + self.fc_args.split(" "), stdout=self.guest_log)
+        logger.info("launching firecracker: {}/firecracker ".format(self.fc_path) + self.fc_args)
+        self.guest_log = open("{}/guest.log".format(self.fc_path), "w")
+        self.fc_process = subprocess.Popen(["{}/firecracker".format(self.fc_path)] + self.fc_args.split(" "), stdout=self.guest_log)
         self.worker_sockets.append(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
         # start up firecracker by making api request
-        #logger.info("Setting up firecracker stuff {}".format(time.time()))
+        logger.info("Setting up firecracker stuff {}".format(time.time()))
         #time.sleep(1)
-        #self.transport = httpx.HTTPTransport(uds="{}/firecracker.socket".format(self.unixsock_path))
-        #self.client = httpx.Client(transport=self.transport)
-        #self.fc_logfile = "{}/firecracker.log".format(self.unixsock_path)
-        #open(self.fc_logfile, 'x').close() # create empty logging file
-        #data_startlog = {"log_path": self.fc_logfile, "level": "Debug", "show_level": True, "show_log_origin": True}
-        #data_addbootsource = {"kernel_image_path": self.kernel_path, "boot_args": self.kernel_boot_args}
-        #data_setrootfs = {"drive_id": "rootfs", "path_on_host": self.rootfs_path, "is_root_device": True, "is_read_only": False}
-        #data_setupnet = {"iface_id": self.guest_netdev, "guest_mac": self.fc_mac, "host_dev_name": self.tap_dev}
-        #data_startinstance = {"action_type": "InstanceStart"}
+        self.transport = httpx.HTTPTransport(uds="{}/firecracker.socket".format(self.unixsock_path))
+        self.client = httpx.Client(transport=self.transport)
+        self.fc_logfile = "{}/firecracker.log".format(self.unixsock_path)
+        open(self.fc_logfile, 'x').close() # create empty logging file
+        data_startlog = {"log_path": self.fc_logfile, "level": "Debug", "show_level": True, "show_log_origin": True}
+        data_addbootsource = {"kernel_image_path": self.kernel_path, "boot_args": self.kernel_boot_args}
+        data_setrootfs = {"drive_id": "rootfs", "path_on_host": self.rootfs_path, "is_root_device": True, "is_read_only": False}
+        data_setupnet = {"iface_id": self.guest_netdev, "guest_mac": self.fc_mac, "host_dev_name": self.tap_dev}
+        data_startinstance = {"action_type": "InstanceStart"}
 
         # self.transport = httpx.HTTPTransport(uds="/home/jamie/funcx_virtines_sum23/firecracker/firecracker.socket")
-        #self.client.put("http://localhost/logger", content=json.dumps(data_startlog).encode())
-        #self.client.put("http://localhost/boot-source", content=json.dumps(data_addbootsource).encode())
-        #self.client.put("http://localhost/drives/rootfs", content=json.dumps(data_setrootfs).encode())
-        #self.client.put(f"http://localhost/network-interfaces/{self.guest_netdev}", content=json.dumps(data_setupnet).encode())
-        #time.sleep(0.015)
-        #logger.info("Launching firecracker instance: {}".format(time.time()))
-        #self.client.put("http://localhost/actions", content=json.dumps(data_startinstance).encode())
-        #time.sleep(0.015)
+        self.client.put("http://localhost/logger", content=json.dumps(data_startlog).encode())
+        self.client.put("http://localhost/boot-source", content=json.dumps(data_addbootsource).encode())
+        self.client.put("http://localhost/drives/rootfs", content=json.dumps(data_setrootfs).encode())
+        self.client.put(f"http://localhost/network-interfaces/{self.guest_netdev}", content=json.dumps(data_setupnet).encode())
+        time.sleep(0.015)
+        logger.info("Launching firecracker instance: {}".format(time.time()))
+        self.client.put("http://localhost/actions", content=json.dumps(data_startinstance).encode())
+        time.sleep(0.015)
         # TODO send data to the worker first here
         def connect_timeout(socket, ip, port, timeout=10):
             start = time.time()
             while time.time() - start < timeout:
                 try:
                     socket.connect((ip, port))
+                    return True
                 except:
                     continue
+            return False
 
         self.result_server.listen(5)
-        connect_timeout(self.worker_sockets[0], self.fc_ip, self.fc_port)
+        if not connect_timeout(self.worker_sockets[0], self.fc_ip, self.fc_port):
+            raise Exception("Unable to connect to worker")
+
         # self.worker_sockets[0].sendall(pickle.dumps(self.result_addr))
         logger.info("Connected to worker to worker")
         init_msg = self.worker_sockets[0].recv(1024)
