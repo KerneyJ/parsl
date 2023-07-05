@@ -172,9 +172,9 @@ class Manager:
         self.fc_port = fc_port
         self.fc_ip = "10.0.0.2" # TODO make this not hard coded
         self.fc_mac = fc_mac
-        self.result_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.result_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.result_addr = ("10.0.0.1", 30000)
-        self.result_socket.bind(self.result_addr) # TODO maybe loop to find a port if 30000 is taken
+        self.result_server.bind(self.result_addr) # TODO maybe loop to find a port if 30000 is taken
         self.worker_sockets = []
         self.worker_result_sockets = []
 
@@ -330,11 +330,13 @@ class Manager:
                 else:
                     task_recv_counter += len(tasks)
                     logger.debug("Got executor tasks: {}, cumulative count of tasks: {}".format([t['task_id'] for t in tasks], task_recv_counter))
-
+                    
                     for task in tasks:
                         logger.info("sending task to the worker")
                         # self.pending_task_queue.put(task)
-                        self.worker_socket.sendall(pickle.dumps(task))
+                        self.worker_sockets[0].sendall(pickle.dumps(task))
+                        ack = self.worker_sockets[0].recv(1024)
+                        logger.info("Received ack from worker {}".format(ack.decode()))
                         # logger.debug("Ready tasks: {}".format(
                         #    [i['task_id'] for i in self.pending_task_queue]))
 
@@ -375,8 +377,8 @@ class Manager:
         while not kill_event.is_set():
             try:
                 logger.debug("Starting pending_result_queue get")
-                r = self.result_socket.recv(2 ** 20)
-                logger.info("received -> {} <- from worker".format(r.decode()))
+                r = self.worker_result_sockets[0].recv(2 ** 20)
+                logger.debug("Received result of length {} from worker".format(len(r)))
                 # r = self.pending_result_queue.get(block=True, timeout=push_poll_period)
                 logger.debug("Got a result item")
                 items.append(r)
@@ -414,31 +416,32 @@ class Manager:
         self._kill_event = threading.Event()
         self._tasks_in_progress = multiprocessing.Manager().dict()
 
-        logger.info("launching firecracker: {}/firecracker ".format(self.fc_path) + self.fc_args)
-        self.fc_process = subprocess.Popen(["{}/firecracker".format(self.fc_path)] + self.fc_args.split(" "))
+        #logger.info("launching firecracker: {}/firecracker ".format(self.fc_path) + self.fc_args)
+        #self.guest_log = open("{}/guest.log".format(self.fc_path), "w")
+        #self.fc_process = subprocess.Popen(["{}/firecracker".format(self.fc_path)] + self.fc_args.split(" "), stdout=self.guest_log)
         self.worker_sockets.append(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
         # start up firecracker by making api request
-        logger.info("Setting up firecracker stuff {}".format(time.time()))
-        time.sleep(1)
-        self.transport = httpx.HTTPTransport(uds="{}/firecracker.socket".format(self.unixsock_path))
-        self.client = httpx.Client(transport=self.transport)
-        self.fc_logfile = "{}/firecracker.log".format(self.unixsock_path)
-        open(self.fc_logfile, 'x').close() # create empty logging file
-        data_startlog = {"log_path": self.fc_logfile, "level": "Debug", "show_level": True, "show_log_origin": True}
-        data_addbootsource = {"kernel_image_path": self.kernel_path, "boot_args": self.kernel_boot_args}
-        data_setrootfs = {"drive_id": "rootfs", "path_on_host": self.rootfs_path, "is_root_device": True, "is_read_only": False}
-        data_setupnet = {"iface_id": self.guest_netdev, "guest_mac": self.fc_mac, "host_dev_name": self.tap_dev}
-        data_startinstance = {"action_type": "InstanceStart"}
+        #logger.info("Setting up firecracker stuff {}".format(time.time()))
+        #time.sleep(1)
+        #self.transport = httpx.HTTPTransport(uds="{}/firecracker.socket".format(self.unixsock_path))
+        #self.client = httpx.Client(transport=self.transport)
+        #self.fc_logfile = "{}/firecracker.log".format(self.unixsock_path)
+        #open(self.fc_logfile, 'x').close() # create empty logging file
+        #data_startlog = {"log_path": self.fc_logfile, "level": "Debug", "show_level": True, "show_log_origin": True}
+        #data_addbootsource = {"kernel_image_path": self.kernel_path, "boot_args": self.kernel_boot_args}
+        #data_setrootfs = {"drive_id": "rootfs", "path_on_host": self.rootfs_path, "is_root_device": True, "is_read_only": False}
+        #data_setupnet = {"iface_id": self.guest_netdev, "guest_mac": self.fc_mac, "host_dev_name": self.tap_dev}
+        #data_startinstance = {"action_type": "InstanceStart"}
 
-        self.transport = httpx.HTTPTransport(uds="/home/jamie/funcx_virtines_sum23/firecracker/firecracker.socket")
-        self.client.put("http://localhost/logger", content=json.dumps(data_startlog).encode())
-        self.client.put("http://localhost/boot-source", content=json.dumps(data_addbootsource).encode())
-        self.client.put("http://localhost/drives/rootfs", content=json.dumps(data_setrootfs).encode())
-        self.client.put(f"http://localhost/network-interfaces/{self.guest_netdev}", content=json.dumps(data_setupnet).encode())
-        time.sleep(0.015)
-        logger.info("Launching firecracker instance: {}".format(time.time()))
-        res = self.client.put("http://localhost/actions", content=json.dumps(data_startinstance).encode())
-        time.sleep(0.015)
+        # self.transport = httpx.HTTPTransport(uds="/home/jamie/funcx_virtines_sum23/firecracker/firecracker.socket")
+        #self.client.put("http://localhost/logger", content=json.dumps(data_startlog).encode())
+        #self.client.put("http://localhost/boot-source", content=json.dumps(data_addbootsource).encode())
+        #self.client.put("http://localhost/drives/rootfs", content=json.dumps(data_setrootfs).encode())
+        #self.client.put(f"http://localhost/network-interfaces/{self.guest_netdev}", content=json.dumps(data_setupnet).encode())
+        #time.sleep(0.015)
+        #logger.info("Launching firecracker instance: {}".format(time.time()))
+        #self.client.put("http://localhost/actions", content=json.dumps(data_startinstance).encode())
+        #time.sleep(0.015)
         # TODO send data to the worker first here
         def connect_timeout(socket, ip, port, timeout=10):
             start = time.time()
@@ -448,7 +451,7 @@ class Manager:
                 except:
                     continue
 
-        self.result_socket.listen(5)
+        self.result_server.listen(5)
         connect_timeout(self.worker_sockets[0], self.fc_ip, self.fc_port)
         # self.worker_sockets[0].sendall(pickle.dumps(self.result_addr))
         logger.info("Connected to worker to worker")
@@ -457,14 +460,9 @@ class Manager:
         self.worker_sockets[0].sendall(pickle.dumps(self.result_addr))
         # self.worker_socket.sendto(b"start", (self.fc_ip, self.fc_port))
         # data, addr = self.worker_socket.recvfrom(1024)
-        client, addr = self.result_socket.accept()
+        result_client, addr = self.result_server.accept()
         logger.info("Connected to worker at address {}".format(addr))
-        # self.result_socket.listen(self.worker_count)
-        # logger.info("Listening for {} workers".format(self.worker_count))
-        # for _ in range(self.worker_count):
-        #     client, addr = self.result_socket.accept()
-        #     logger.info("Connected to worker at {}".format(addr))
-        #     self.result_sockets.append(client)
+        self.worker_result_sockets.append(result_client)
 
         logger.debug("Workers started")
         self._task_puller_thread = threading.Thread(target=self.pull_tasks,
@@ -487,6 +485,8 @@ class Manager:
         self._result_pusher_thread.join()
 
         self.fc_process.kill()
+        self.fc_process.wait()
+        self.guest_log.close()
         self.task_incoming.close()
         self.result_outgoing.close()
         self.context.term()
