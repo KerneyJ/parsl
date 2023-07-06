@@ -422,7 +422,6 @@ class Manager:
         self.worker_sockets.append(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
         # start up firecracker by making api request
         logger.info("Setting up firecracker stuff {}".format(time.time()))
-        #time.sleep(1)
         self.transport = httpx.HTTPTransport(uds="{}/firecracker.socket".format(self.unixsock_path))
         self.client = httpx.Client(transport=self.transport)
         self.fc_logfile = "{}/firecracker.log".format(self.unixsock_path)
@@ -433,7 +432,6 @@ class Manager:
         data_setupnet = {"iface_id": self.guest_netdev, "guest_mac": self.fc_mac, "host_dev_name": self.tap_dev}
         data_startinstance = {"action_type": "InstanceStart"}
 
-        # self.transport = httpx.HTTPTransport(uds="/home/jamie/funcx_virtines_sum23/firecracker/firecracker.socket")
         self.client.put("http://localhost/logger", content=json.dumps(data_startlog).encode())
         self.client.put("http://localhost/boot-source", content=json.dumps(data_addbootsource).encode())
         self.client.put("http://localhost/drives/rootfs", content=json.dumps(data_setrootfs).encode())
@@ -457,13 +455,10 @@ class Manager:
         if not connect_timeout(self.worker_sockets[0], self.fc_ip, self.fc_port):
             raise Exception("Unable to connect to worker")
 
-        # self.worker_sockets[0].sendall(pickle.dumps(self.result_addr))
         logger.info("Connected to worker to worker")
         init_msg = self.worker_sockets[0].recv(1024)
         logger.info("received initial message: {}".format(init_msg))
         self.worker_sockets[0].sendall(pickle.dumps(self.result_addr))
-        # self.worker_socket.sendto(b"start", (self.fc_ip, self.fc_port))
-        # data, addr = self.worker_socket.recvfrom(1024)
         result_client, addr = self.result_server.accept()
         logger.info("Connected to worker at address {}".format(addr))
         self.worker_result_sockets.append(result_client)
