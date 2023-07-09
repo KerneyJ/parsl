@@ -252,10 +252,9 @@ class Manager:
         self.worker_result_sockets = []
 
         # Socket for receiving result from workers
-        self.result_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.result_addr = ("10.0.0.1", 30000)
+        self.result_server = self.context.socket(zmq.REP)
+        self.result_addr = "tcp://10.0.0.1:30000"
         self.result_server.bind(self.result_addr) # TODO maybe loop to find a port if 30000 is taken
-        self.result_poller = select.poll()
 
     def create_reg_message(self):
         """ Creates a registration message to identify the worker to the interchange
@@ -343,7 +342,7 @@ class Manager:
                     for task in tasks:
                         worker_sock = random.choice(self.worker_sockets)
                         logger.info("Sending task to the worker {}".format(worker_sock))
-                        worker_sock.sendall(pickle.dumps(task))
+                        worker_sock.send(pickle.dumps(task))
                         ack = worker_sock.recv(1024)
                         logger.info("Received ack from worker {}".format(ack.decode()))
                         # logger.debug("Ready tasks: {}".format(
@@ -392,14 +391,10 @@ class Manager:
 
         while not kill_event.is_set():
             try:
-                events = self.result_poller.poll(5000)
-                for sock_fd, event in events:
-                    if event and select.POLLIN:
-                        socket, worker_id = get_socket(sock_fd, self.worker_result_sockets)
-                        if socket:
-                            r = socket.recv(2 ** 20)
-                            logger.debug("Got a result item from worker_{}".format(worker_id))
-                            items.append(r)
+                r = self.result_server.recv()
+                logger.debug("Got a result")
+                items.append(r)
+                self.result_server.send(b"ack")
             except Exception as e:
                 logger.exception("Got an exception: {}".format(e))
 
@@ -432,20 +427,19 @@ class Manager:
             start = time.time()
             while time.time() - start < timeout:
                 try:
-                    socket.connect((ip, port))
+                    socket.connect("tcp://{}:{}".format(ip, port))
                     return True
                 except:
                     continue
             return False
 
-        self.result_server.listen(int(self.worker_count * 1.5))
         self._kill_event = threading.Event()
         self._tasks_in_progress = multiprocessing.Manager().dict()
         logger.info("Provisioning firecracker: {}/firecracker ".format(self.fc_path))
         for w in range(self.worker_count):
             logger.info("Setting up worker {}".format(w))
             self.fc_processes.append( subprocess.Popen(["{}/firecracker".format(self.fc_path)] + self.fc_args[w].split(" ")))
-            self.worker_sockets.append(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
+            self.worker_sockets.append(self.context.socket(zmq.REQ))
             # start up firecracker by making api request
             logger.info("Sending firecracker api request {}".format(time.time()))
             self.transport = httpx.HTTPTransport(uds="{}/firecracker-sock{}.socket".format(self.unixsock_path, w))
@@ -468,16 +462,15 @@ class Manager:
             time.sleep(0.015)
 
             if not connect_timeout(self.worker_sockets[w], self.fc_ips[w], self.fc_port):
-                raise Exception("Unable to connect to worker {}".format(w))
+                raise Exception("Unable to connect to worker {} at tcp://{}:{}".format(w, self.fc_ips[w], self.fc_port))
 
-            logger.info("Connected to worker to worker")
-            init_msg = self.worker_sockets[w].recv(1024)
-            logger.info("received initial message: {}".format(init_msg)) 
-            self.worker_sockets[w].sendall(pickle.dumps(self.result_addr))
-            result_client, addr = self.result_server.accept()
-            logger.info("Result server connected to worker {} at address {}".format(w, addr))
-            self.worker_result_sockets.append(result_client)
-            self.result_poller.register(result_client)
+            logger.info("Connected to worker at {}".format(self.fc_ips[w]))
+            self.worker_sockets[w].send(self.result_addr.encode())
+            init_msg = self.worker_sockets[w].recv()
+            logger.info("received initial message from worker: {}".format(init_msg))
+            ack = self.result_server.recv()
+            logger.info("received {} from worker result socket".format(ack))
+            self.result_server.send(b"ack")
 
         logger.debug("Workers started")
         self._task_puller_thread = threading.Thread(target=self.pull_tasks,
