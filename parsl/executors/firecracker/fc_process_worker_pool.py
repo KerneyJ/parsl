@@ -67,6 +67,7 @@ class Manager:
                  fc_extra_args,
                  fc_port,
                  fc_mac,
+                 fc_ip,
                  # firecracker stuff ^^^
                  addresses="127.0.0.1",
                  address_probe_timeout=30,
@@ -244,10 +245,10 @@ class Manager:
 
         # Lists of attributes unique to each worker
         self.fc_processes = []
-        self.tap_devs = ["tapvm{}".format(i) for i in range(self.worker_count)] # TODO Make this not hardcoded and use fc_mac argument
+        self.tap_devs = ["{}{}".format(tap_dev, i) for i in range(self.worker_count)]
         self.fc_args = ["--api-sock {}/firecracker-sock{}.socket".format(self.unixsock_path, i) for i in range(self.worker_count)]
         self.fc_ips = ["10.0.{}.2".format(i) for i in range(self.worker_count)] # TODO make this not hard coded # FIXME we are also assuming that they do not have more 256 workers on 1 node
-        self.fc_macs = ["AA:FC:00:00:00:{:02d}".format(i) for i in range(self.worker_count)] # TODO Make this not hardcoded and use fc_mac argument
+        self.fc_macs = [fc_mac.format(i) for i in range(self.worker_count)]
         self.worker_sockets = []
         self.worker_result_sockets = []
 
@@ -721,8 +722,10 @@ if __name__ == "__main__":
                         help="kernel boot arguments")
     parser.add_argument("--guest_netdev", default="eth0",
                         help="name of the device in the guest")
-    parser.add_argument("--fc_mac", default="AA:FC:00:00:00:01",
-                        help="firecracker mac address")
+    parser.add_argument("--fc_mac", default="AA:FC:00:00:00:{:02d}",
+                        help="firecracker mac address as a formatable python string")
+    parser.add_argument("--fc_ip", default="10.0.{}.2",
+                        help="firecracker base ip address as formatable python string")
     parser.add_argument("--fc_extra_args", default="",
                         help="extra arugments to firecracker")
     parser.add_argument("--fc_port", default=20001,
@@ -763,7 +766,8 @@ if __name__ == "__main__":
         logger.info("network tap device: {}".format(args.tap_dev))
         logger.info("kernel boot arguments: {}".format(args.kernel_boot_args))
         logger.info("guest net device name: {}".format(args.guest_netdev))
-        logger.info("firecracker mac address: {}".format(args.fc_mac))
+        logger.info("firecracker mac address base: {}".format(args.fc_mac))
+        logger.info("firecracker ip address base: {}".format(args.fc_ip))
         logger.info("firecracker extra arguments: {}".format(args.fc_extra_args))
         logger.info("firecracker vm port: {}".format(args.fc_port))
 
@@ -792,7 +796,8 @@ if __name__ == "__main__":
                           guest_netdev=args.guest_netdev,
                           fc_extra_args=args.fc_extra_args,
                           fc_port=args.fc_port,
-                          fc_mac=args.fc_mac)
+                          fc_mac=args.fc_mac,
+                          fc_ip=args.fc_ip)
         manager.start()
 
     except Exception:
