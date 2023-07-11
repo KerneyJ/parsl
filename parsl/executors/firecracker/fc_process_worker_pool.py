@@ -434,45 +434,63 @@ class Manager:
                     continue
             return False
 
-        self._kill_event = threading.Event()
-        self._tasks_in_progress = multiprocessing.Manager().dict()
-        logger.info("Provisioning firecracker: {}/firecracker ".format(self.fc_path))
-        for w in range(self.worker_count):
-            logger.info("Setting up worker {}".format(w))
-            self.fc_processes.append( subprocess.Popen(["{}/firecracker".format(self.fc_path)] + self.fc_args[w].split(" ")))
-            self.worker_sockets.append(self.context.socket(zmq.REQ))
+        def launch_fcwrk(worker_id, sock_q, proc_q):
+            logger.info("Setting up worker {}".format(worker_id))
+            fc_proc = subprocess.Popen(["{}/firecracker".format(self.fc_path)] + self.fc_args[worker_id].split(" "))
+            worker_sock = self.context.socket(zmq.REQ)
             # start up firecracker by making api request
             logger.info("Sending firecracker api request {}".format(time.time()))
-            self.transport = httpx.HTTPTransport(uds="{}/firecracker-sock{}.socket".format(self.unixsock_path, w))
-            self.client = httpx.Client(transport=self.transport)
-            fc_logfile = "{}/firecracker-worker{}.log".format(self.unixsock_path, w)
+            transport = httpx.HTTPTransport(uds="{}/firecracker-sock{}.socket".format(self.unixsock_path, worker_id))
+            client = httpx.Client(transport=transport)
+            fc_logfile = "{}/firecracker-worker{}.log".format(self.unixsock_path, worker_id)
             open(fc_logfile, 'x').close() # create empty logging file
             data_startlog = {"log_path": fc_logfile, "level": "Debug", "show_level": True, "show_log_origin": True}
             data_addbootsource = {"kernel_image_path": self.kernel_path, "boot_args": self.kernel_boot_args}
             data_setrootfs = {"drive_id": "rootfs", "path_on_host": self.rootfs_path, "is_root_device": True, "is_read_only": False}
-            data_setupnet = {"iface_id": self.guest_netdev, "guest_mac": self.fc_macs[w], "host_dev_name": self.tap_devs[w]}
+            data_setupnet = {"iface_id": self.guest_netdev, "guest_mac": self.fc_macs[worker_id], "host_dev_name": self.tap_devs[worker_id]}
             data_startinstance = {"action_type": "InstanceStart"}
 
-            self.client.put("http://localhost/logger", content=json.dumps(data_startlog).encode())
-            self.client.put("http://localhost/boot-source", content=json.dumps(data_addbootsource).encode())
-            self.client.put("http://localhost/drives/rootfs", content=json.dumps(data_setrootfs).encode())
-            self.client.put(f"http://localhost/network-interfaces/{self.guest_netdev}", content=json.dumps(data_setupnet).encode())
+            client.put("http://localhost/logger", content=json.dumps(data_startlog).encode())
+            client.put("http://localhost/boot-source", content=json.dumps(data_addbootsource).encode())
+            client.put("http://localhost/drives/rootfs", content=json.dumps(data_setrootfs).encode())
+            client.put(f"http://localhost/network-interfaces/{self.guest_netdev}", content=json.dumps(data_setupnet).encode())
             time.sleep(0.015)
             logger.info("Launching firecracker instance: {}".format(time.time()))
-            self.client.put("http://localhost/actions", content=json.dumps(data_startinstance).encode())
+            client.put("http://localhost/actions", content=json.dumps(data_startinstance).encode())
             time.sleep(0.015)
 
-            if not connect_timeout(self.worker_sockets[w], self.fc_ips[w], self.fc_port):
-                raise Exception("Unable to connect to worker {} at tcp://{}:{}".format(w, self.fc_ips[w], self.fc_port))
+            if not connect_timeout(worker_sock, self.fc_ips[worker_id], self.fc_port):
+                raise Exception("Unable to connect to worker {} at tcp://{}:{}".format(worker_id, self.fc_ips[worker_id], self.fc_port))
 
-            logger.info("Connected to worker at {}".format(self.fc_ips[w]))
-            self.worker_sockets[w].send(self.result_addr.encode())
-            init_msg = self.worker_sockets[w].recv()
+            logger.info("Connected to worker at {}".format(self.fc_ips[worker_id]))
+            worker_sock.send(self.result_addr.encode())
+            init_msg = worker_sock.recv()
             logger.info("received initial message from worker: {}".format(init_msg))
             ack = self.result_server.recv()
             logger.info("received {} from worker result socket".format(ack))
             self.result_server.send(b"ack")
+            sock_q.put(worker_sock)
+            proc_q.put(fc_proc)
 
+        socket_queue = queue.Queue()
+        process_queue = queue.Queue()
+        self._kill_event = threading.Event()
+        self._tasks_in_progress = multiprocessing.Manager().dict()
+        logger.info("Provisioning firecracker: {}/firecracker ".format(self.fc_path))
+        threads = []
+        for w in range(self.worker_count):
+            spawnfc_thread = threading.Thread(target=launch_fcwrk, args=(w, socket_queue, process_queue,), name="Spawn-Worker-{}".format(w))
+            spawnfc_thread.start()
+            threads.append(spawnfc_thread)
+
+        logger.info("Created the threads to spawn firecracker workers")
+        for t in threads:
+            t.join()
+
+        logger.info("Joined threads to spawn firecracker workers")
+
+        self.worker_sockets = [socket_queue.get() for _ in range(self.worker_count)]
+        self.fc_processes = [process_queue.get() for _ in range(self.worker_count)]
         logger.debug("Workers started")
         self._task_puller_thread = threading.Thread(target=self.pull_tasks,
                                                     args=(self._kill_event,),
