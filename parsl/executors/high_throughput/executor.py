@@ -211,7 +211,9 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
                  poll_period: int = 10,
                  address_probe_timeout: Optional[int] = None,
                  worker_logdir_root: Optional[str] = None,
-                 block_error_handler: bool = True):
+                 block_error_handler: bool = True,
+                 container_type: str = None,
+                 container_img_path: str = None):
         logging.disable()
         logger.debug("Initializing HighThroughputExecutor")
 
@@ -281,6 +283,8 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
         self.run_dir = '.'
         self.worker_logdir_root = worker_logdir_root
         self.cpu_affinity = cpu_affinity
+        self.container_type = container_type
+        self.container_img_path = container_img_path
 
         if not launch_cmd:
             self.launch_cmd = ("process_worker_pool.py {debug} {max_workers} "
@@ -298,7 +302,9 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
                                "--hb_threshold={heartbeat_threshold} "
                                "--cpu-affinity {cpu_affinity} "
                                "--available-accelerators {accelerators} "
-                               "--start-method {start_method}")
+                               "--start-method {start_method} "
+                               "--container_type {container_type} "
+                               "--container_img_path {container_img_path} ")
 
     radio_mode = "htex"
 
@@ -334,7 +340,9 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
                                        logdir=worker_logdir,
                                        cpu_affinity=self.cpu_affinity,
                                        accelerators=" ".join(self.available_accelerators),
-                                       start_method=self.start_method)
+                                       start_method=self.start_method,
+                                       container_type=self.container_type,
+                                       container_img_path=self.container_img_path)
         self.launch_cmd = l_cmd
         logger.debug("Launch command: {}".format(self.launch_cmd))
 
