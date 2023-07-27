@@ -212,7 +212,7 @@ class Manager:
         elif start_method == "thread":
             self.mpProcess = Thread
         else:
-            raise ValueError(f'HTEx does not support start method: "{start_method}"')
+            raise ValueError(f'HTEX does not support start method: "{start_method}"')
 
         self.pending_task_queue = mpQueue()
         self.pending_result_queue = mpQueue()
@@ -443,7 +443,11 @@ class Manager:
             transport = httpx.HTTPTransport(uds="{}/firecracker-sock{}.socket".format(self.unixsock_path, worker_id))
             client = httpx.Client(transport=transport)
             fc_logfile = "{}/firecracker-worker{}.log".format(self.unixsock_path, worker_id)
-            open(fc_logfile, 'x').close() # create empty logging file
+            try:
+                open(fc_logfile, 'x').close() # create empty logging file
+            except Exception as e:
+                logger.error("Unable to create log file for fc-worker: {}".format(str(e)))
+                return
             data_startlog = {"log_path": fc_logfile, "level": "Debug", "show_level": True, "show_log_origin": True}
             data_addbootsource = {"kernel_image_path": self.kernel_path, "boot_args": self.kernel_boot_args}
             data_setrootfs = {"drive_id": "rootfs", "path_on_host": self.rootfs_path, "is_root_device": True, "is_read_only": False}
