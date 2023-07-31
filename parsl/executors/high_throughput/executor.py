@@ -33,7 +33,7 @@ from parsl.providers import LocalProvider
 
 logger = logging.getLogger(__name__)
 
-_start_methods = ['fork', 'spawn', 'thread']
+_start_methods = ['fork', 'spawn', 'thread', 'container']
 
 
 class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
@@ -213,8 +213,9 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
                  worker_logdir_root: Optional[str] = None,
                  block_error_handler: bool = True,
                  container_type: str = None,
-                 container_img_path: str = None):
-        logging.disable()
+                 container_img_path: str = None,
+                 container_ip: str = None):
+        # logging.disable()
         logger.debug("Initializing HighThroughputExecutor")
 
         BlockProviderExecutor.__init__(self, provider=provider, block_error_handler=block_error_handler)
@@ -285,9 +286,10 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
         self.cpu_affinity = cpu_affinity
         self.container_type = container_type
         self.container_img_path = container_img_path
+        self.container_ip = container_ip
 
         if not launch_cmd:
-            self.launch_cmd = ("process_worker_pool.py {debug} {max_workers} "
+            self.launch_cmd = ("{script} {debug} {max_workers} "
                                "-a {addresses} "
                                "-p {prefetch_capacity} "
                                "-c {cores_per_worker} "
@@ -302,10 +304,11 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
                                "--hb_threshold={heartbeat_threshold} "
                                "--cpu-affinity {cpu_affinity} "
                                "--available-accelerators {accelerators} "
-                               "--start-method {start_method} "
-                               "--container_type {container_type} "
-                               "--container_img_path {container_img_path} ")
-
+                               "--start-method {start_method} ")
+            if self.start_method == "container":
+                self.launch_cmd += "--container_type {container_type} "
+                self.launch_cmd += "--container_img_path {container_img_path} "
+                self.launch_cmd += "--container_ip {container_ip} "
     radio_mode = "htex"
 
     def initialize_scaling(self):
@@ -324,26 +327,50 @@ class HighThroughputExecutor(BlockProviderExecutor, RepresentationMixin):
         if self.worker_logdir_root is not None:
             worker_logdir = "{}/{}".format(self.worker_logdir_root, self.label)
 
-        l_cmd = self.launch_cmd.format(debug=debug_opts,
-                                       prefetch_capacity=self.prefetch_capacity,
-                                       address_probe_timeout_string=address_probe_timeout_string,
-                                       addresses=self.all_addresses,
-                                       task_port=self.worker_task_port,
-                                       result_port=self.worker_result_port,
-                                       cores_per_worker=self.cores_per_worker,
-                                       mem_per_worker=self.mem_per_worker,
-                                       max_workers=max_workers,
-                                       nodes_per_block=self.provider.nodes_per_block,
-                                       heartbeat_period=self.heartbeat_period,
-                                       heartbeat_threshold=self.heartbeat_threshold,
-                                       poll_period=self.poll_period,
-                                       logdir=worker_logdir,
-                                       cpu_affinity=self.cpu_affinity,
-                                       accelerators=" ".join(self.available_accelerators),
-                                       start_method=self.start_method,
-                                       container_type=self.container_type,
-                                       container_img_path=self.container_img_path)
-        self.launch_cmd = l_cmd
+        if self.start_method == "container":
+            l_cmd = self.launch_cmd.format(script="container_process_worker_pool.py",
+                                           debug=debug_opts,
+                                           prefetch_capacity=self.prefetch_capacity,
+                                           address_probe_timeout_string=address_probe_timeout_string,
+                                           addresses=self.all_addresses,
+                                           task_port=self.worker_task_port,
+                                           result_port=self.worker_result_port,
+                                           cores_per_worker=self.cores_per_worker,
+                                           mem_per_worker=self.mem_per_worker,
+                                           max_workers=max_workers,
+                                           nodes_per_block=self.provider.nodes_per_block,
+                                           heartbeat_period=self.heartbeat_period,
+                                           heartbeat_threshold=self.heartbeat_threshold,
+                                           poll_period=self.poll_period,
+                                           logdir=worker_logdir,
+                                           cpu_affinity=self.cpu_affinity,
+                                           accelerators=" ".join(self.available_accelerators),
+                                           start_method=self.start_method,
+                                           container_type=self.container_type,
+                                           container_img_path=self.container_img_path,
+                                           container_ip=self.container_ip)
+            self.launch_cmd = l_cmd
+        else:
+            l_cmd = self.launch_cmd.format(script="process_worker_pool.py",
+                                           debug=debug_opts,
+                                           prefetch_capacity=self.prefetch_capacity,
+                                           address_probe_timeout_string=address_probe_timeout_string,
+                                           addresses=self.all_addresses,
+                                           task_port=self.worker_task_port,
+                                           result_port=self.worker_result_port,
+                                           cores_per_worker=self.cores_per_worker,
+                                           mem_per_worker=self.mem_per_worker,
+                                           max_workers=max_workers,
+                                           nodes_per_block=self.provider.nodes_per_block,
+                                           heartbeat_period=self.heartbeat_period,
+                                           heartbeat_threshold=self.heartbeat_threshold,
+                                           poll_period=self.poll_period,
+                                           logdir=worker_logdir,
+                                           cpu_affinity=self.cpu_affinity,
+                                           accelerators=" ".join(self.available_accelerators),
+                                           start_method=self.start_method)
+            self.launch_cmd = l_cmd
+
         logger.debug("Launch command: {}".format(self.launch_cmd))
 
         logger.debug("Starting HighThroughputExecutor with provider:\n%s", self.provider)

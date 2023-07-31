@@ -80,7 +80,7 @@ class DataFlowKernel:
         """
 
         # this will be used to check cleanup only happens once
-        logging.disable()
+        # logging.disable()
         self.cleanup_called = False
 
         self._config = config
