@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import random
 import argparse
 import logging
 import os
@@ -363,7 +364,7 @@ class Manager:
                 #logger.debug("Starting pending_result_queue get")
                 #r = self.pending_result_queue.get(block=True, timeout=push_poll_period)
                 #logger.debug("Got a result item")
-                r = self.result_sever.recv()
+                r = self.result_server.recv()
                 logger.debug("Got a result")
                 items.append(r)
                 self.result_server.send(b"ack")
@@ -394,6 +395,7 @@ class Manager:
 
         TODO: Move task receiving to a thread
         """
+        logger.info("Manager starting")
         start = time.time()
         self._kill_event = threading.Event()
         self._tasks_in_progress = multiprocessing.Manager().dict()
@@ -409,6 +411,7 @@ class Manager:
 
         self.procs = {}
         self.worker_sockets = []
+        logger.info("Launching containers of type {}".format(self.container_type))
         for worker_id in range(self.worker_count):
             worker_sock = self.context.socket(zmq.REQ)
             p = None
@@ -418,8 +421,7 @@ class Manager:
             elif self.container_type == "singularity":
                 p = subprocess.Popen(["singularity", "exec", self.container_img_path, "python3", "/opt/worker.py", self.container_ip, str(self.base_port + self.incr_port)])
             else:
-                pass
-            #    raise Exception("Unsupported container type")
+                raise Exception("Unsupported container type")
 
             if not connect_timeout(worker_sock, self.container_ip, self.base_port + self.incr_port):
                 raise Exception("Unable to connect to worker {} at tcp://{}:{}".format(self.incr_port, self.container_ip, self.base_port + self.incr_port))
@@ -434,8 +436,6 @@ class Manager:
             self.incr_port += 1
             self.procs[worker_id] = p
             self.worker_sockets.append(worker_sock)
-
-            worker_sock = self.context.socket(zmq.REQ)
 
         logger.debug("Workers started")
 
