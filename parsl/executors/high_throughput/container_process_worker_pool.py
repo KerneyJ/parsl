@@ -416,7 +416,7 @@ class Manager:
                 pass
             #    p = subprocess.Popen(["docker", "run", "-P", "--rm", self.container_path]) # implicitly assumes that container_path is user:tag
             elif self.container_type == "singularity":
-                p = subprocess.Popen(["singularity", "exec", self.container_img_path, "python3", "/opt/worker.py", self.container_ip, str(self.base_port + self.incr_ort]))
+                p = subprocess.Popen(["singularity", "exec", self.container_img_path, "python3", "/opt/worker.py", self.container_ip, str(self.base_port + self.incr_port)])
             else:
                 pass
             #    raise Exception("Unsupported container type")
