@@ -416,10 +416,15 @@ class Manager:
             worker_sock = self.context.socket(zmq.REQ)
             p = None
             if self.container_type == "docker":
-                pass
-            #    p = subprocess.Popen(["docker", "run", "-P", "--rm", self.container_path]) # implicitly assumes that container_path is user:tag
+                p = subprocess.Popen(["docker", "run",
+                                      "--network", "host",
+                                      "-P", "--rm", self.container_img_path,
+                                      "python3", "/opt/worker.py", self.container_ip, str(self.base_port + self.incr_port)
+                                      ]) # implicitly assumes that container_path is user:tag
             elif self.container_type == "singularity":
-                p = subprocess.Popen(["singularity", "exec", self.container_img_path, "python3", "/opt/worker.py", self.container_ip, str(self.base_port + self.incr_port)])
+                p = subprocess.Popen(["singularity", "exec", self.container_img_path,
+                                      "python3", "/opt/worker.py", self.container_ip, str(self.base_port + self.incr_port)
+                                      ])
             else:
                 raise Exception("Unsupported container type")
 
