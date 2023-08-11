@@ -384,12 +384,6 @@ class Manager:
         items = []
         logger.info("Starting to push results")
 
-        def get_socket(fd, socket_list):
-            for i, socket in enumerate(socket_list):
-                if fd == socket.fileno():
-                    return socket, i
-            return None, None
-
         while not kill_event.is_set():
             try:
                 r = self.result_server.recv()
