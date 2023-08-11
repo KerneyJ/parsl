@@ -482,6 +482,7 @@ class Manager:
         self._tasks_in_progress = multiprocessing.Manager().dict()
         logger.info("Provisioning firecracker: {}/firecracker ".format(self.fc_path))
         threads = []
+        start = time.time()
         for w in range(self.worker_count):
             spawnfc_thread = threading.Thread(target=launch_fcwrk, args=(w, socket_queue, process_queue,), name="Spawn-Worker-{}".format(w))
             spawnfc_thread.start()
@@ -491,7 +492,7 @@ class Manager:
         for t in threads:
             t.join()
 
-        logger.info("Joined threads to spawn firecracker workers")
+        logger.info(f"Joined threads to spawn {len(threads)} firecracker workers in {time.time() - start}")
 
         self.worker_sockets = [socket_queue.get() for _ in range(self.worker_count)]
         self.fc_processes = [process_queue.get() for _ in range(self.worker_count)]
